@@ -1,0 +1,101 @@
+# Render Blueprint for Legal RAG System
+# Deploy this by connecting your GitHub repository to Render and selecting industrial.yaml
+
+services:
+  # ---------------------------------------------------------------------------
+  # Vector Database (Qdrant)
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: qdrant
+    env: docker
+    dockerContext: .
+    dockerfilePath: Dockerfile.qdrant # We'll need to create this or use industrial image
+    image: qdrant/qdrant:v1.12.4
+    disk:
+      name: qdrant-data
+      mountPath: /qdrant/storage
+      sizeGB: 10
+    envVars:
+      - key: QDRANT__SERVICE__GRPC_PORT
+        value: 6334
+
+  # ---------------------------------------------------------------------------
+  # Backend (FastAPI)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: backend
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: legal-rag-db
+          property: connectionString
+      - key: REDIS_URL
+        fromKeyValueStore:
+          name: legal-rag-redis
+          property: connectionString
+      - key: QDRANT_HOST
+        fromService:
+          type: worker
+          name: qdrant
+          property: host
+      - key: OPENAI_API_KEY
+        sync: false # Set this in Render dashboard
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: celery-worker
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && celery -A app.workers worker -l info -Q ingestion,document
+    envVars:
+      - key: DATABASE_URL_SYNC
+        fromDatabase:
+          name: legal-rag-db
+          property: connectionString
+      - key: REDIS_URL
+        fromKeyValueStore:
+          name: legal-rag-redis
+          property: connectionString
+      - key: QDRANT_HOST
+        fromService:
+          type: worker
+          name: qdrant
+          property: host
+      - key: OPENAI_API_KEY
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # Frontend (Next.js)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: frontend
+    env: node
+    buildCommand: cd frontend && npm install && npm run build
+    startCommand: cd frontend && npm start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: backend
+          property: url
+
+databases:
+  - name: legal-rag-db
+    databaseName: federal_law_agent
+    user: postgres
+    plan: free
+
+keyvaluestores:
+  - name: legal-rag-redis
+    type: redis
+    plan: free
+    ipAllowList: [] # Only allow internal access

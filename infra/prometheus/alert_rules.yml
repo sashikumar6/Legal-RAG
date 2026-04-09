@@ -1,0 +1,133 @@
+# Prometheus Alert Rules for the Legal AI Intake Agent
+# =============================================================================
+
+groups:
+  # ---------------------------------------------------------------------------
+  # API Health Alerts
+  # ---------------------------------------------------------------------------
+  - name: api_health
+    rules:
+      - alert: HighP95Latency
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 API latency"
+          description: "The 95th percentile HTTP request latency has exceeded 5 seconds for the past 5 minutes."
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API error rate"
+          description: "More than 5% of requests are returning 5xx errors over the past 5 minutes."
+
+  # ---------------------------------------------------------------------------
+  # LLM Alerts
+  # ---------------------------------------------------------------------------
+  - name: llm_health
+    rules:
+      - alert: LLMRetrySpikeWarning
+        expr: sum(increase(llm_retry_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM retry spike detected"
+          description: "More than 10 LLM retries in the past 5 minutes. The LLM provider may be experiencing issues."
+
+      - alert: LLMFailureSpike
+        expr: sum(increase(llm_failures_total[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM failure spike"
+          description: "More than 5 LLM failures in the past 5 minutes. Check API key and provider status."
+
+  # ---------------------------------------------------------------------------
+  # Retrieval & Verification Alerts
+  # ---------------------------------------------------------------------------
+  - name: retrieval_quality
+    rules:
+      - alert: VerificationFailureSpike
+        expr: sum(increase(verification_fail_total[15m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Answer verification failure spike"
+          description: "More than 10 verification failures in the past 15 minutes. Answer quality may be degraded."
+
+      - alert: HighEmptyRetrievalRate
+        expr: |
+          sum(rate(retrieval_empty_results_total[15m]))
+          / sum(rate(retrieval_requests_total[15m]))
+          > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High empty retrieval rate"
+          description: "More than 30% of retrieval requests are returning no results. The corpus may need attention."
+
+  # ---------------------------------------------------------------------------
+  # Document Ingestion Alerts
+  # ---------------------------------------------------------------------------
+  - name: ingestion_health
+    rules:
+      - alert: IngestionFailures
+        expr: sum(increase(document_parse_failures_total[30m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Document ingestion failures"
+          description: "Multiple document parsing failures detected in the past 30 minutes."
+
+      - alert: DeadLetterQueueGrowth
+        expr: dead_letter_queue_size > 5
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dead-letter queue is growing"
+          description: "The dead-letter queue has more than 5 items. Failed jobs are accumulating."
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure Alerts
+  # ---------------------------------------------------------------------------
+  - name: infrastructure
+    rules:
+      - alert: QdrantDown
+        expr: up{job="backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend service is down"
+          description: "The backend service has been unreachable for 2 minutes. Qdrant may also be unavailable."
+
+      - alert: PostgresConnectionSaturation
+        expr: pg_stat_activity_count / pg_settings_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connection saturation"
+          description: "PostgreSQL is using more than 80% of its max connections."
+
+      - alert: RedisMemoryPressure
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory pressure"
+          description: "Redis is using more than 80% of its configured max memory."

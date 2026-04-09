@@ -1,0 +1,67 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+infra/.env
+.env.local
+.env.production
+
+# Private Keys
+*.key
+DigitalJurist.key
+
+# Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Node
+node_modules/
+.next/
+out/
+
+# Docker
+.docker/
+
+# Uploads
+uploads/
+*.uploaded
+
+# Logs
+*.log
+logs/
+
+# Coverage
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Alembic
+alembic/__pycache__/
+
+# Large Data Files
+backend/qdrant_local_data/
+data/
+*.sqlite
+
