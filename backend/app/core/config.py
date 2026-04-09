@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     verification_confidence_threshold: float = 0.7
     max_retries: int = 1
 
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8080"]
+    cors_origins: str | list[str] = ["http://localhost:3000", "http://localhost:8080"]
 
     @field_validator("cors_origins", mode="before")
     @classmethod
