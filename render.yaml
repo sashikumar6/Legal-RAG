@@ -1,18 +1,15 @@
 # Render Blueprint for Legal RAG System
-# Deploy this by connecting your GitHub repository to Render and selecting industrial.yaml
-
 services:
   # ---------------------------------------------------------------------------
   # Vector Database (Qdrant)
   # ---------------------------------------------------------------------------
-  - type: worker
+  - type: web
     name: qdrant
     env: docker
-    dockerContext: .
-    dockerfilePath: Dockerfile.qdrant # We'll need to create this or use industrial image
     image: qdrant/qdrant:v1.12.4
+    plan: starter # Needs starter for persistent disk
     disk:
-      name: qdrant-data
+      name: qdrant-storage
       mountPath: /qdrant/storage
       sizeGB: 10
     envVars:
@@ -32,21 +29,35 @@ services:
         fromDatabase:
           name: legal-rag-db
           property: connectionString
+      - key: DATABASE_URL_SYNC
+        fromDatabase:
+          name: legal-rag-db
+          property: connectionString
       - key: REDIS_URL
         fromKeyValueStore:
           name: legal-rag-redis
           property: connectionString
       - key: QDRANT_HOST
         fromService:
-          type: worker
+          type: web
           name: qdrant
           property: host
-      - key: OPENAI_API_KEY
-        sync: false # Set this in Render dashboard
+      - key: QDRANT_PORT
+        value: 6333
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
         value: "false"
+      - key: OPENAI_API_KEY
+        sync: false # Set in Render dashboard
+      - key: CORS_ORIGINS
+        value: "*" # Or set to your frontend URL
+      - key: FEDERAL_XML_BASE_PATH
+        value: /data/xml
+    disk:
+      name: federal-data
+      mountPath: /data/xml
+      sizeGB: 10
 
   # ---------------------------------------------------------------------------
   # Celery Worker
@@ -67,11 +78,13 @@ services:
           property: connectionString
       - key: QDRANT_HOST
         fromService:
-          type: worker
+          type: web
           name: qdrant
           property: host
       - key: OPENAI_API_KEY
         sync: false
+      - key: FEDERAL_XML_BASE_PATH
+        value: /data/xml
 
   # ---------------------------------------------------------------------------
   # Frontend (Next.js)
@@ -91,11 +104,9 @@ services:
 databases:
   - name: legal-rag-db
     databaseName: federal_law_agent
-    user: postgres
-    plan: free
+    plan: starter
 
 keyvaluestores:
   - name: legal-rag-redis
     type: redis
     plan: free
-    ipAllowList: [] # Only allow internal access

@@ -260,6 +260,28 @@ docker compose -f infra/docker-compose.yml --profile full up --build
 
 ---
 
+## Deployment to Render.com
+
+This project is configured for easy deployment on **Render.com** using the **Blueprints** feature.
+
+### Step-By-Step Deployment
+
+1. **Connect GitHub**: Log in to [Render](https://dashboard.render.com/) and click **New > Blueprint**.
+2. **Connect Repository**: Select your `Legal-RAG` repository.
+3. **Review Blueprint**: Render will automatically detect the `render.yaml` file. Click **Apply**.
+4. **Set Environment Variables**: In the Render dashboard, go to the **backend** and **celery-worker** services and set the missing `OPENAI_API_KEY`.
+5. **Upload Federal Data**:
+   - Since the US Code XML data is large and ignored by git, you must upload the XML files (e.g., `usc11.xml`, `usc26.xml`) to the persistent disk at `/data/xml`.
+   - You can do this by using the **Shell** tab in the Render Backend service or by setting up a temporary SFTP/Copy command.
+6. **Ingest Data**: Once the XML files are present, run the ingestion script via the Render Shell:
+   ```bash
+   cd backend && python -m app.ingestion.run_ingestion
+   ```
+
+---
+
+---
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
