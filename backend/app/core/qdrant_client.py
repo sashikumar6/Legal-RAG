@@ -100,6 +100,28 @@ def ensure_collections(client) -> None:
                 logger.info(f"Created collection '{collection_name}'")
             except Exception as e:
                 logger.error(f"Failed to create collection '{collection_name}': {e}")
+        
+        # Ensure payload indexes exist (Qdrant Cloud requires this for filtering)
+        try:
+            from qdrant_client.models import PayloadSchemaType
+
+            if collection_name == settings.qdrant_federal_collection:
+                client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name="title_number",
+                    field_schema=PayloadSchemaType.INTEGER,
+                )
+            elif collection_name == settings.qdrant_document_collection:
+                client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name="upload_id",
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+            logger.info(f"Ensured payload indexes for '{collection_name}'")
+        except Exception as e:
+            # It's normal to get a 409 Conflict if the index already exists
+            if "already exists" not in str(e).lower():
+                logger.error(f"Failed to create payload indexes for '{collection_name}': {e}")
 
 
 def get_collection_info(client, collection_name: str) -> Optional[dict]:
