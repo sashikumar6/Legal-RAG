@@ -43,13 +43,6 @@ class Settings(BaseSettings):
     database_pool_size: int = 20
     database_max_overflow: int = 10
 
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
-    redis_cache_ttl: int = 3600
-
-    # Celery
-    celery_broker_url: str = "redis://localhost:6379/1"
-    celery_result_backend: str = "redis://localhost:6379/2"
 
     # Qdrant
     qdrant_host: str = "localhost"

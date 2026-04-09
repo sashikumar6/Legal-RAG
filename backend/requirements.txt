@@ -11,9 +11,9 @@ alembic==1.14.1
 psycopg2-binary==2.9.10
 asyncpg==0.30.0
 
-# Cache & Queue
-redis==5.2.1
-celery[redis]==5.4.0
+# Cache & Queue (Removed Redis/Celery for Free Tier)
+# redis==5.2.1
+# celery[redis]==5.4.0
 
 # Vector Store
 qdrant-client==1.12.1

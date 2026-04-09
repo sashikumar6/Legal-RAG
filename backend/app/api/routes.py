@@ -199,7 +199,6 @@ async def readiness():
     """Readiness probe checking dependent services."""
     checks = {
         "database": True,
-        "redis": True,
         "qdrant": _qdrant_client is not None,
         "openai": bool(settings.openai_api_key),
     }
@@ -210,13 +209,6 @@ async def readiness():
             await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
     except Exception:
         checks["database"] = False
-
-    try:
-        import redis
-        r = redis.from_url(settings.redis_url)
-        r.ping()
-    except Exception:
-        checks["redis"] = False
 
     all_ready = all(checks.values())
     return ReadinessResponse(

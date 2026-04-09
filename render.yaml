@@ -16,8 +16,6 @@ services:
         sync: false # Set this to your Supabase Connection String
       - key: DATABASE_URL_SYNC
         sync: false # Set this to your Supabase Connection String (Sync)
-      - key: REDIS_URL
-        sync: false # Set this to your Upstash Redis URL
       - key: QDRANT_HOST
         sync: false # Set this to your Qdrant Cloud URL (e.g. https://xyz.qdrant.io)
       - key: QDRANT_API_KEY
