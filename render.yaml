@@ -22,6 +22,8 @@ services:
         sync: false # Set this to your Qdrant Cloud API Key
       - key: OPENAI_API_KEY
         sync: false # Set this to your OpenAI API Key
+      - key: PYTHON_VERSION
+        value: 3.11.8
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
