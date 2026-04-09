@@ -29,7 +29,7 @@ services:
       - key: DEBUG
         value: "false"
       - key: CORS_ORIGINS
-        value: "*" # Set to your frontend Render URL
+        value: '["*"]' # Set to your frontend Render URL, e.g. ["https://frontend.onrender.com"]
       - key: FEDERAL_XML_BASE_PATH
         value: /tmp/xml # Use /tmp for ephemeral ingestion if needed
 
