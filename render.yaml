@@ -44,7 +44,4 @@ services:
     startCommand: cd frontend && npm start
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          type: web
-          name: backend
-          property: url
+        sync: false # Set this to your Backend Web Service URL (e.g. https://legal-rag-backend.onrender.com)
