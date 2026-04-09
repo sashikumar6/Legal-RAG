@@ -1,97 +1,45 @@
-# Render Blueprint for Legal RAG System
+# Render Blueprint for 100% Free Legal RAG System
+# Uses Free Tiers for all services (Render Free, Supabase, Qdrant Cloud, Upstash)
+
 services:
   # ---------------------------------------------------------------------------
-  # Vector Database (Qdrant)
-  # ---------------------------------------------------------------------------
-  - type: web
-    name: qdrant
-    env: docker
-    image: qdrant/qdrant:v1.12.4
-    plan: starter # Needs starter for persistent disk
-    disk:
-      name: qdrant-storage
-      mountPath: /qdrant/storage
-      sizeGB: 10
-    envVars:
-      - key: QDRANT__SERVICE__GRPC_PORT
-        value: 6334
-
-  # ---------------------------------------------------------------------------
-  # Backend (FastAPI)
+  # Backend (FastAPI) - Render Free Plan
   # ---------------------------------------------------------------------------
   - type: web
     name: backend
     env: python
+    plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: legal-rag-db
-          property: connectionString
+        sync: false # Set this to your Supabase Connection String
       - key: DATABASE_URL_SYNC
-        fromDatabase:
-          name: legal-rag-db
-          property: connectionString
+        sync: false # Set this to your Supabase Connection String (Sync)
       - key: REDIS_URL
-        fromKeyValueStore:
-          name: legal-rag-redis
-          property: connectionString
+        sync: false # Set this to your Upstash Redis URL
       - key: QDRANT_HOST
-        fromService:
-          type: web
-          name: qdrant
-          property: host
-      - key: QDRANT_PORT
-        value: 6333
+        sync: false # Set this to your Qdrant Cloud URL (e.g. https://xyz.qdrant.io)
+      - key: QDRANT_API_KEY
+        sync: false # Set this to your Qdrant Cloud API Key
+      - key: OPENAI_API_KEY
+        sync: false # Set this to your OpenAI API Key
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
         value: "false"
-      - key: OPENAI_API_KEY
-        sync: false # Set in Render dashboard
       - key: CORS_ORIGINS
-        value: "*" # Or set to your frontend URL
+        value: "*" # Set to your frontend Render URL
       - key: FEDERAL_XML_BASE_PATH
-        value: /data/xml
-    disk:
-      name: federal-data
-      mountPath: /data/xml
-      sizeGB: 10
+        value: /tmp/xml # Use /tmp for ephemeral ingestion if needed
 
   # ---------------------------------------------------------------------------
-  # Celery Worker
-  # ---------------------------------------------------------------------------
-  - type: worker
-    name: celery-worker
-    env: python
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: cd backend && celery -A app.workers worker -l info -Q ingestion,document
-    envVars:
-      - key: DATABASE_URL_SYNC
-        fromDatabase:
-          name: legal-rag-db
-          property: connectionString
-      - key: REDIS_URL
-        fromKeyValueStore:
-          name: legal-rag-redis
-          property: connectionString
-      - key: QDRANT_HOST
-        fromService:
-          type: web
-          name: qdrant
-          property: host
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: FEDERAL_XML_BASE_PATH
-        value: /data/xml
-
-  # ---------------------------------------------------------------------------
-  # Frontend (Next.js)
+  # Frontend (Next.js) - Render Free Plan
   # ---------------------------------------------------------------------------
   - type: web
     name: frontend
     env: node
+    plan: free
     buildCommand: cd frontend && npm install && npm run build
     startCommand: cd frontend && npm start
     envVars:
@@ -100,13 +48,3 @@ services:
           type: web
           name: backend
           property: url
-
-databases:
-  - name: legal-rag-db
-    databaseName: federal_law_agent
-    plan: starter
-
-keyvaluestores:
-  - name: legal-rag-redis
-    type: redis
-    plan: free

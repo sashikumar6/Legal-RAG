@@ -35,7 +35,23 @@ def create_qdrant_client():
             logger.error(f"Failed to create local Qdrant client: {e}")
             return None
 
-    # Production default: Docker-hosted Qdrant
+    # Production default: Docker-hosted Qdrant or Qdrant Cloud
+    if settings.qdrant_host.startswith(("http://", "https://")):
+        logger.info(f"Connecting to Qdrant via URL: {settings.qdrant_host}")
+        try:
+            client = QdrantClient(
+                url=settings.qdrant_host,
+                api_key=settings.qdrant_api_key,
+                timeout=10,
+            )
+            # Verify connection
+            client.get_collections()
+            logger.info("Qdrant connection established")
+            return client
+        except Exception as e:
+            logger.error(f"Failed to connect to Qdrant at {settings.qdrant_host}: {e}")
+            return None
+
     logger.info(f"Connecting to Qdrant at {settings.qdrant_host}:{settings.qdrant_port}")
     try:
         client = QdrantClient(

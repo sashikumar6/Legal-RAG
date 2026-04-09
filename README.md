@@ -260,23 +260,39 @@ docker compose -f infra/docker-compose.yml --profile full up --build
 
 ---
 
-## Deployment to Render.com
+## Deployment (100% Free Forever Stack)
 
-This project is configured for easy deployment on **Render.com** using the **Blueprints** feature.
+This project is optimized to run entirely on the **Free Tiers** of various cloud providers, ensuring $0/month cost.
 
-### Step-By-Step Deployment
+### 1. Provision Free Services
+You will need to create free accounts and get connection strings from these providers:
 
-1. **Connect GitHub**: Log in to [Render](https://dashboard.render.com/) and click **New > Blueprint**.
-2. **Connect Repository**: Select your `Legal-RAG` repository.
-3. **Review Blueprint**: Render will automatically detect the `render.yaml` file. Click **Apply**.
-4. **Set Environment Variables**: In the Render dashboard, go to the **backend** and **celery-worker** services and set the missing `OPENAI_API_KEY`.
-5. **Upload Federal Data**:
-   - Since the US Code XML data is large and ignored by git, you must upload the XML files (e.g., `usc11.xml`, `usc26.xml`) to the persistent disk at `/data/xml`.
-   - You can do this by using the **Shell** tab in the Render Backend service or by setting up a temporary SFTP/Copy command.
-6. **Ingest Data**: Once the XML files are present, run the ingestion script via the Render Shell:
-   ```bash
-   cd backend && python -m app.ingestion.run_ingestion
-   ```
+*   **Frontend & Backend**: [Render](https://render.com) (Free Web Service)
+*   **Database**: [Supabase](https://supabase.com) (Free Postgres)
+*   **Vector Store**: [Qdrant Cloud](https://qdrant.tech/cloud/) (Free Cluster)
+*   **Redis (Cache/Queue)**: [Upstash](https://upstash.com) (Free Redis)
+
+### 2. Configure Render Blueprint
+1.  Log in to [Render](https://dashboard.render.com/) and click **New > Blueprint**.
+2.  Connect your GitHub repository.
+3.  Render will detect the `render.yaml` file. Click **Apply**.
+4.  **Important**: In the Render dashboard, go to the **backend** service and set these Environment Variables:
+    *   `DATABASE_URL`: Your Supabase URI (`postgresql://...`)
+    *   `REDIS_URL`: Your Upstash Redis URL (`redis://...`)
+    *   `QDRANT_HOST`: Your Qdrant Cloud Cluster URL (`https://...`)
+    *   `QDRANT_API_KEY`: Your Qdrant Cloud API Key
+    *   `OPENAI_API_KEY`: Your OpenAI API Key
+
+### 3. Data Ingestion (Free Tier)
+Since Render's free tier has no persistent disk, the federal law XML data is not stored on the server.
+1.  **Local Ingestion**: The easiest way is to run the ingestion from your local machine, pointing to your **Qdrant Cloud** URL.
+    ```bash
+    # In your local backend folder
+    export QDRANT_HOST="https://your-qdrant-cloud-url"
+    export QDRANT_API_KEY="your-api-key"
+    python -m app.ingestion.run_ingestion
+    ```
+2.  **Document Uploads**: In the "Document Q&A" mode, files you upload are processed and stored in Qdrant Cloud. They will persist even if the Render service restarts.
 
 ---
 
