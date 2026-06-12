@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -11,6 +13,59 @@ from app.core.schemas import QueryMode, RetrievedChunk
 from app.observability import retrieval_by_mode_total, retrieval_latency_seconds, retrieval_requests_total
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Hybrid search helpers (shared by FederalRetriever and CfrRetriever)
+# ---------------------------------------------------------------------------
+
+def _build_sparse_vector(text: str) -> tuple[list[int], list[float]]:
+    """Convert query text to a token-frequency sparse vector for Qdrant sparse search.
+
+    Maps each token to a bucket in a 2^17-dimensional space via SHA-256 hashing.
+    Returns empty lists when text contains no alphanumeric tokens.
+    """
+    tokens = re.findall(r'\b[a-z0-9]+\b', text.lower())
+    if not tokens:
+        return [], []
+
+    freq: dict[int, int] = {}
+    for token in tokens:
+        idx = int(hashlib.sha256(token.encode()).hexdigest(), 16) % 131072
+        freq[idx] = freq.get(idx, 0) + 1
+
+    n = len(tokens)
+    indices = sorted(freq.keys())
+    values = [freq[i] / n for i in indices]
+    return indices, values
+
+
+def _rrf_fuse(
+    dense_hits: list,
+    sparse_hits: list,
+    k: int = 60,
+    top_k: int = 10,
+) -> list:
+    """Reciprocal Rank Fusion of dense and sparse result lists.
+
+    Returns a list of hits ordered by descending RRF score, truncated to top_k.
+    """
+    scores: dict[str, float] = {}
+    hit_by_id: dict[str, Any] = {}
+
+    for rank, hit in enumerate(dense_hits):
+        hid = str(hit.id)
+        scores[hid] = scores.get(hid, 0.0) + 1.0 / (k + rank + 1)
+        hit_by_id[hid] = hit
+
+    for rank, hit in enumerate(sparse_hits):
+        hid = str(hit.id)
+        scores[hid] = scores.get(hid, 0.0) + 1.0 / (k + rank + 1)
+        if hid not in hit_by_id:
+            hit_by_id[hid] = hit
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    return [hit_by_id[hid] for hid, _ in ranked]
 
 
 class FederalRetriever:
@@ -31,7 +86,7 @@ class FederalRetriever:
         title_filter: Optional[list[int]] = None,
         score_threshold: float = 0.0,
     ) -> list[RetrievedChunk]:
-        """Search the federal corpus. Optionally filter by title numbers."""
+        """Search the federal corpus with hybrid dense+sparse retrieval and RRF fusion."""
         start = time.perf_counter()
         retrieval_requests_total.labels(mode="federal").inc()
         retrieval_by_mode_total.labels(mode="federal").inc()
@@ -59,17 +114,38 @@ class FederalRetriever:
                 ]
             )
 
+        # Dense search (fetch 2× for RRF headroom)
         try:
-            results = self.qdrant_client.search(
+            dense_results = self.qdrant_client.search(
                 collection_name=self.collection,
                 query_vector=query_embedding,
                 query_filter=search_filter,
-                limit=top_k,
-                score_threshold=score_threshold,
+                limit=top_k * 2,
+                score_threshold=0.0,
             )
         except Exception as e:
-            logger.error(f"Qdrant search error: {e}")
+            logger.error(f"Qdrant dense search error: {e}")
             return []
+
+        # Sparse search — graceful fallback if collection has no sparse index
+        sparse_results: list = []
+        try:
+            from qdrant_client.models import SparseVector
+            s_indices, s_values = _build_sparse_vector(query)
+            if s_indices:
+                sparse_results = self.qdrant_client.search(
+                    collection_name=self.collection,
+                    query_vector=("sparse", SparseVector(indices=s_indices, values=s_values)),
+                    query_filter=search_filter,
+                    limit=top_k * 2,
+                    score_threshold=0.0,
+                )
+        except Exception:
+            pass  # dense-only when sparse vectors are not indexed
+
+        # RRF fusion then score-threshold filter
+        fused = _rrf_fuse(dense_results, sparse_results, top_k=top_k)
+        results = [h for h in fused if h.score >= score_threshold]
 
         chunks = []
         for hit in results:

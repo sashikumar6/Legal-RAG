@@ -22,6 +22,9 @@ from app.core.schemas import (
 )
 from app.agents import build_agent_graph, GraphState
 from app.retrieval import DocumentRetriever, FederalRetriever
+from app.retrieval.cfr_retriever import CfrRetriever
+from app.retrieval.case_law_retriever import CaseLawRetriever
+from app.retrieval.source_merger import SourceMerger
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,9 @@ class ChatService:
         self.embedding_fn = embedding_fn
         self.federal_retriever = FederalRetriever(qdrant_client, embedding_fn)
         self.document_retriever = DocumentRetriever(qdrant_client, embedding_fn)
+        self.cfr_retriever = CfrRetriever(qdrant_client, embedding_fn)
+        self.case_law_retriever = CaseLawRetriever(qdrant_client, embedding_fn)
+        self.source_merger = SourceMerger()
         self.agent_graph = build_agent_graph()
 
     async def process_query(self, request: ChatRequest) -> ChatResponse:
@@ -61,6 +67,9 @@ class ChatService:
             # Inject live retriever instances so retrieve_context node can use them
             "federal_retriever": self.federal_retriever,
             "document_retriever": self.document_retriever,
+            "cfr_retriever": self.cfr_retriever,
+            "case_law_retriever": self.case_law_retriever,
+            "source_merger": self.source_merger,
         }
 
         # Run agent graph

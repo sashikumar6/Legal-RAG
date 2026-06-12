@@ -1,238 +1,126 @@
-# Dual-Mode Federal Law and Document AI Intake Agent
+# Federal Law RAG
 
-A production-grade AI-powered legal research system with two strictly isolated modes:
-
-1. **Federal Legal Knowledge Q&A** — Answer general U.S. federal law questions using a curated corpus of selected U.S. Code titles (8, 11, 15, 18, 26, 28, 29, 42) with retrieval-augmented generation and citation support.
-2. **Legal Document Q&A** — Upload PDF/DOCX/TXT files and ask questions grounded only in the uploaded document, with page/section/clause-level citations.
-
-> **🆕 Documentation Updates**:
-> - For a deep dive into architecture and design decisions, see [info.md](info.md).
-> - For the latest development status and fixed issues, see [log.md](log.md).
-> - For a step-by-step free deployment on Oracle Cloud, see [ORACLE_DEPLOYMENT.md](docs/ORACLE_DEPLOYMENT.md).
+Federal Law RAG is a production-grade retrieval-augmented generation system for U.S. federal legal research. It combines hybrid dense+sparse retrieval (BM25-style SHA-256 hashing + OpenAI embeddings, fused via Reciprocal Rank Fusion) across four strictly isolated Qdrant collections — federal statutes, CFR regulations, federal case law, and uploaded documents — with a 13-node LangGraph workflow for classification, grounding, verification, and answer generation. Cross-source queries run all three law corpora through a `SourceMerger` that deduplicates near-identical passages (cosine > 0.95) and explicitly flags contradictions between statute, regulation, and precedent rather than silently resolving them. Retrieval latency, request counts, and mode breakdowns are instrumented with Prometheus and visualized in Grafana.
 
 > **⚠️ Disclaimer**: This system does NOT provide legal advice. All outputs are informational only and based on retrieved statutory text. Consult a qualified attorney for legal guidance.
+
+---
+
+## Related Project
+
+This system is regression-tested by a standalone eval harness:  
+👉 [legal-rag-eval](https://github.com/yourusername/legal-rag-eval)
+
+Latest baseline scores:
+
+| Metric             | Score | Threshold | Status   |
+|--------------------|-------|-----------|----------|
+| Hallucination Rate | TBD   | < 10%     | Run eval |
+| Citation Accuracy  | TBD   | > 80%     | Run eval |
+| Answer Relevancy   | TBD   | > 70%     | Run eval |
+| Source Attribution | TBD   | > 75%     | Run eval |
+| Conflict Detection | TBD   | > 80%     | Run eval |
+
+TBD values are filled after the first eval run against a live Qdrant instance.
 
 ---
 
 ## Architecture
 
 ```mermaid
-graph TB
-    subgraph Frontend["Next.js Frontend"]
-        UI[Chat Interface]
-        UP[Upload Panel]
-        CV[Citation Viewer]
-        ED[Evidence Drawer]
-    end
+flowchart LR
+    User([User]) --> FE[Next.js Frontend]
+    FE --> API[FastAPI :8000]
+    API --> LG[LangGraph Router]
 
-    subgraph API["FastAPI Backend"]
-        GW[API Gateway]
-        AUTH[Auth Middleware]
-        METRICS[Prometheus Metrics]
-    end
+    LG -- FEDERAL --> FR[federal_retriever]
+    LG -- CFR_REGULATION --> CR[cfr_retriever]
+    LG -- CASE_LAW --> CL[case_law_retriever]
+    LG -- CROSS_SOURCE --> SM[source_merger]
+    LG -- DOCUMENT --> DR[document_retriever]
 
-    subgraph AgentWorkflow["LangGraph Agent Workflow"]
-        II[ingest_input] --> CM[classify_mode]
-        CM --> EE[extract_entities]
-        EE --> DTH[detect_title_hints]
-        DTH --> DDS[detect_document_scope]
-        DDS --> MP[make_plan]
-        MP --> RTR[route_to_retriever]
-        RTR --> RC[retrieve_context]
-        RC --> GR[grade_retrieval]
-        GR --> GA[generate_answer]
-        GA --> VA[verify_answer]
-        VA --> ROF[retry_or_finalize]
-        ROF --> PLM[persist_logs_and_metrics]
-    end
+    SM --> FR
+    SM --> CR
+    SM --> CL
+    SM --> CD[conflict detection]
 
-    subgraph Retrieval["Isolated Retrieval"]
-        FR[Federal Retriever]
-        DR[Document Retriever]
-    end
+    FR --> QF[(federal_corpus\nQdrant)]
+    CR --> QC[(cfr_corpus\nQdrant)]
+    CL --> QL[(case_law_corpus\nQdrant)]
+    DR --> QD[(user_docs\nQdrant)]
 
-    subgraph Storage["Data Layer"]
-        PG[(PostgreSQL)]
-        RD[(Redis)]
-        QD[(Qdrant)]
-    end
+    QF --> LLM[gpt-4o]
+    QC --> LLM
+    QL --> LLM
+    QD --> LLM
+    CD --> LLM
+    LLM --> Resp([Response + Citations])
 
-    subgraph Workers["Background Workers"]
-        CW[Celery Workers]
-        FI[Federal Ingestion]
-        DI[Document Ingestion]
-    end
-
-    UI --> GW
-    UP --> GW
-    GW --> II
-    RTR --> FR
-    RTR --> DR
-    FR --> QD
-    DR --> QD
-    CW --> FI
-    CW --> DI
-    FI --> QD
-    DI --> QD
-    PLM --> PG
-    GW --> RD
-```
-
-## Sequence Diagrams
-
-### Federal Legal Knowledge Q&A Mode
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant FE as Next.js Frontend
-    participant API as FastAPI
-    participant Agent as LangGraph Agent
-    participant FR as Federal Retriever
-    participant Qdrant as Qdrant VectorDB
-    participant LLM as LLM Provider
-    participant DB as PostgreSQL
-
-    User->>FE: Ask federal law question
-    FE->>API: POST /chat {query, mode: auto}
-    API->>Agent: ingest_input(query)
-    Agent->>Agent: classify_mode → FEDERAL
-    Agent->>Agent: extract_entities
-    Agent->>Agent: detect_title_hints
-    Agent->>Agent: make_plan
-    Agent->>FR: route_to_retriever(FEDERAL)
-    FR->>Qdrant: Search federal corpus (filtered by title hints)
-    Qdrant-->>FR: Retrieved chunks with metadata
-    FR-->>Agent: Ranked evidence chunks
-    Agent->>Agent: grade_retrieval (confidence check)
-    alt Retrieval is strong
-        Agent->>LLM: generate_answer(query, evidence)
-        LLM-->>Agent: Draft answer with citations
-        Agent->>Agent: verify_answer (check claims vs evidence)
-        alt Verification passes
-            Agent->>DB: persist_logs_and_metrics
-            Agent-->>API: Final answer + citations + confidence
-            API-->>FE: Response with evidence
-            FE-->>User: Display answer + citation viewer
-        else Verification fails
-            Agent->>Agent: retry_or_finalize (stricter grounding)
-            Agent-->>API: Refined answer or insufficient evidence
-        end
-    else Retrieval is weak
-        Agent->>Agent: retry retrieval once
-        alt Still weak
-            Agent-->>API: "Insufficient evidence" response
-        end
-    end
-```
-
-### Legal Document Q&A Mode
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant FE as Next.js Frontend
-    participant API as FastAPI
-    participant Worker as Celery Worker
-    participant Parser as PDF/DOCX Parser
-    participant Qdrant as Qdrant VectorDB
-    participant Agent as LangGraph Agent
-    participant DR as Document Retriever
-    participant LLM as LLM Provider
-
-    User->>FE: Upload PDF/DOCX
-    FE->>API: POST /upload (multipart)
-    API->>Worker: Enqueue document processing
-    Worker->>Parser: Parse document
-    Parser-->>Worker: Extracted text + page/heading metadata
-    Worker->>Worker: Structure-aware chunking
-    Worker->>Qdrant: Index chunks (upload_id isolated)
-    Worker-->>API: Processing complete
-    API-->>FE: Document ready
-
-    User->>FE: Ask question about uploaded document
-    FE->>API: POST /chat {query, upload_id}
-    API->>Agent: ingest_input(query, upload_id)
-    Agent->>Agent: classify_mode → DOCUMENT
-    Agent->>Agent: detect_document_scope
-    Agent->>DR: route_to_retriever(DOCUMENT, upload_id)
-    DR->>Qdrant: Search ONLY upload_id collection
-    Qdrant-->>DR: Document-specific chunks
-    DR-->>Agent: Evidence with page/heading refs
-    Agent->>Agent: grade_retrieval
-    Agent->>LLM: generate_answer(query, doc_evidence)
-    LLM-->>Agent: Answer with page/section citations
-    Agent->>Agent: verify_answer
-    Agent-->>API: Final answer + document citations
-    API-->>FE: Response with evidence drawer
-    FE-->>User: Display answer + page references
+    API --> PROM[/metrics → Prometheus :9090]
+    Celery[Celery Workers] --> QF
+    Celery --> QC
+    Celery --> QL
+    Celery --> QD
 ```
 
 ---
 
-## Tech Stack
+## Data Sources
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Next.js, React, Tailwind CSS |
-| Backend | Python, FastAPI, Uvicorn, Pydantic |
-| Database | PostgreSQL, SQLAlchemy, Alembic |
-| Cache/Queue | Redis, Celery |
-| Vector Store | Qdrant |
-| Agent Framework | LangGraph |
-| Document Parsing | PyMuPDF, python-docx, pdfplumber |
-| Federal Corpus | lxml, USLM XML parsing |
-| Observability | Prometheus metrics |
-| Infra | Docker, Docker Compose, Nginx |
+| Source           | Coverage                                         | Qdrant Collection  | Status |
+|------------------|--------------------------------------------------|--------------------|--------|
+| U.S. Code        | Titles 8, 11, 15, 18, 26, 28, 29, 42            | federal_corpus     | Active |
+| CFR              | Title 26 (Tax), Title 29 (Labor)                 | cfr_corpus         | Active |
+| Case Law         | Federal precedential opinions 2000–present       | case_law_corpus    | Active |
+| Uploaded Documents | PDF / DOCX / TXT                               | user_docs          | Active |
 
 ---
 
-## Project Structure
+## Retrieval Modes
 
-```
-├── backend/
-│   ├── app/
-│   │   ├── api/            # FastAPI routes
-│   │   ├── agents/         # LangGraph workflow
-│   │   ├── retrieval/      # Federal + Document retrievers
-│   │   ├── ingestion/      # Federal corpus XML parsing
-│   │   ├── document_ingestion/  # PDF/DOCX processing
-│   │   ├── database/       # SQLAlchemy models + Alembic
-│   │   ├── services/       # Business logic
-│   │   ├── observability/  # Prometheus metrics
-│   │   ├── workers/        # Celery tasks
-│   │   ├── core/           # Config, settings, utils
-│   │   └── tests/          # Test suite
-│   ├── alembic/            # Database migrations
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   ├── Dockerfile
-│   └── package.json
-├── infra/
-│   ├── docker-compose.yml
-│   ├── nginx.conf
-│   └── .env.example
-├── docs/
-├── scripts/
-└── sample_data/
-```
+| Mode             | Triggers On                                    | Sources                          | Conflict Detection |
+|------------------|------------------------------------------------|----------------------------------|--------------------|
+| FEDERAL          | statute questions, U.S.C. references           | federal_corpus                   | No                 |
+| CFR_REGULATION   | regulation questions, C.F.R. references        | cfr_corpus                       | No                 |
+| CASE_LAW         | precedent / court held / ruling questions      | case_law_corpus                  | No                 |
+| CROSS_SOURCE     | interpretation spanning statute + reg + case   | all three corpora + SourceMerger | Yes                |
+| DOCUMENT         | uploaded file questions                        | user_docs                        | No                 |
+
+**Mode isolation rule:** each retriever accesses exactly one collection. Violations are caught in `verify_answer` and cause the answer to be rejected. CROSS_SOURCE is the only mode that crosses collections, and it does so explicitly through `SourceMerger`.
 
 ---
 
-## Quick Start
+## Local Setup
 
 ### Prerequisites
 - Docker & Docker Compose
 - Python 3.11+
 - Node.js 18+
 
+### Environment Variables
+
+Copy the example file and fill in the required secrets:
+
+```bash
+cp infra/.env.example infra/.env
+```
+
+Required variables:
+
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key for embeddings and LLM |
+| `QDRANT_HOST` | Qdrant host (default: `qdrant` in Docker, `localhost` locally) |
+| `QDRANT_API_KEY` | Only required for Qdrant Cloud |
+| `COURTLISTENER_API_KEY` | Free research token from [courtlistener.com](https://www.courtlistener.com/sign-in/) — required for case law ingestion |
+| `QDRANT_CASE_LAW_COLLECTION` | Qdrant collection name for case law (default: `case_law_corpus`) |
+| `CASE_LAW_MAX_OPINIONS_PER_TITLE` | Max opinions to fetch per USC title (default: `500`) |
+
 ### Local Development
 
 ```bash
 # 1. Clone and configure
-cp infra/.env.example .env
+cp infra/.env.example infra/.env
 
 # 2. Start infrastructure
 docker compose -f infra/docker-compose.yml up -d
@@ -252,7 +140,16 @@ npm run dev
 python -m app.ingestion.run_ingestion
 ```
 
-### Docker Deployment
+### Ingest Case Law
+
+```bash
+# Requires COURTLISTENER_API_KEY in environment
+python -m app.ingestion.case_law_ingestion
+```
+
+---
+
+## Docker Deployment
 
 ```bash
 docker compose -f infra/docker-compose.yml --profile full up --build
@@ -265,91 +162,116 @@ docker compose -f infra/docker-compose.yml --profile full up --build
 This project is optimized to run entirely on the **Free Tiers** of various cloud providers, ensuring $0/month cost.
 
 ### 1. Provision Free Services
+
 You will need to create free accounts and get connection strings from these providers:
 
-*   **Frontend & Backend**: [Render](https://render.com) (Free Web Service)
-*   **Database**: [Supabase](https://supabase.com) (Free Postgres)
-*   **Vector Store**: [Qdrant Cloud](https://qdrant.tech/cloud/) (Free Cluster)
-*   **Redis (Cache/Queue)**: [Upstash](https://upstash.com) (Free Redis)
+- **Frontend & Backend**: [Render](https://render.com) (Free Web Service)
+- **Database**: [Supabase](https://supabase.com) (Free Postgres)
+- **Vector Store**: [Qdrant Cloud](https://qdrant.tech/cloud/) (Free Cluster)
+- **Redis (Cache/Queue)**: [Upstash](https://upstash.com) (Free Redis)
 
 ### 2. Configure Render Blueprint
-1.  Log in to [Render](https://dashboard.render.com/) and click **New > Blueprint**.
-2.  Connect your GitHub repository.
-3.  Render will detect the `render.yaml` file. Click **Apply**.
-4.  **Important**: In the Render dashboard, go to the **backend** service and set these Environment Variables:
-    *   `DATABASE_URL`: Your Supabase URI (`postgresql://...`)
-    *   `REDIS_URL`: Your Upstash Redis URL (`redis://...`)
-    *   `QDRANT_HOST`: Your Qdrant Cloud Cluster URL (`https://...`)
-    *   `QDRANT_API_KEY`: Your Qdrant Cloud API Key
-    *   `OPENAI_API_KEY`: Your OpenAI API Key
+
+1. Log in to [Render](https://dashboard.render.com/) and click **New > Blueprint**.
+2. Connect your GitHub repository.
+3. Render will detect the `render.yaml` file. Click **Apply**.
+4. In the Render dashboard, go to the **backend** service and set these Environment Variables:
+   - `DATABASE_URL`: Your Supabase URI (`postgresql://...`)
+   - `REDIS_URL`: Your Upstash Redis URL (`redis://...`)
+   - `QDRANT_HOST`: Your Qdrant Cloud Cluster URL (`https://...`)
+   - `QDRANT_API_KEY`: Your Qdrant Cloud API Key
+   - `OPENAI_API_KEY`: Your OpenAI API Key
+   - `COURTLISTENER_API_KEY`: Your CourtListener research token
 
 ### 3. Data Ingestion (Free Tier)
-Since Render's free tier has no persistent disk, the federal law XML data is not stored on the server.
-1.  **Local Ingestion**: The easiest way is to run the ingestion from your local machine, pointing to your **Qdrant Cloud** URL.
-    ```bash
-    # In your local backend folder
-    export QDRANT_HOST="https://your-qdrant-cloud-url"
-    export QDRANT_API_KEY="your-api-key"
-    python -m app.ingestion.run_ingestion
-    ```
-2.  **Document Uploads**: In the "Document Q&A" mode, files you upload are processed and stored in Qdrant Cloud. They will persist even if the Render service restarts.
 
----
+Since Render's free tier has no persistent disk, the corpus data is ingested locally and pushed to Qdrant Cloud:
+
+```bash
+# In your local backend folder — point at Qdrant Cloud
+export QDRANT_HOST="https://your-qdrant-cloud-url"
+export QDRANT_API_KEY="your-api-key"
+export COURTLISTENER_API_KEY="your-courtlistener-token"
+
+# Ingest federal corpus (U.S. Code XML)
+python -m app.ingestion.run_ingestion
+
+# Ingest case law (CourtListener API — ~1 req/sec, allow several hours)
+python -m app.ingestion.case_law_ingestion
+```
+
+For a step-by-step Oracle Cloud deployment see [ORACLE_DEPLOYMENT.md](docs/ORACLE_DEPLOYMENT.md).
 
 ---
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/chat` | POST | Submit a query (auto-detects mode or uses explicit mode) |
-| `/upload` | POST | Upload PDF/DOCX for document Q&A |
-| `/retrieval` | POST | Direct retrieval endpoint for testing |
-| `/health` | GET | Overall health check |
-| `/health/live` | GET | Liveness probe |
-| `/health/ready` | GET | Readiness probe |
-| `/metrics` | GET | Prometheus metrics endpoint |
+| Endpoint        | Method | Description                                              |
+|-----------------|--------|----------------------------------------------------------|
+| `/chat`         | POST   | Submit a query (auto-detects mode or uses explicit mode) |
+| `/upload`       | POST   | Upload PDF/DOCX/TXT for document Q&A                    |
+| `/retrieval`    | POST   | Direct retrieval endpoint for testing                    |
+| `/health`       | GET    | Overall health check                                     |
+| `/health/live`  | GET    | Liveness probe                                           |
+| `/health/ready` | GET    | Readiness probe                                          |
+| `/metrics`      | GET    | Prometheus metrics endpoint                              |
 
 ---
 
-## Federal Corpus
+## Tech Stack
 
-> [!NOTE]
-> **Current Scope**: Due to vector storage and performance constraints in the current development environment, the RAG index is currently optimized for **Title 11 (Bankruptcy)** and **Title 26 (Internal Revenue Code)**.
-
-The system is architected to ingest U.S. Code XML (USLM format). The following titles are supported by the parser, with **11** and **26** currently active in the production-ready index:
-
-| Title | Subject | Status |
-|-------|---------|--------|
-| 8 | Aliens and Nationality | Parser Ready |
-| **11** | **Bankruptcy** | **Index Active** |
-| 15 | Commerce and Trade | Parser Ready |
-| 18 | Crimes and Criminal Procedure | Parser Ready |
-| **26** | **Internal Revenue Code** | **Index Active** |
-| 28 | Judiciary and Judicial Procedure | Parser Ready |
-| 29 | Labor | Parser Ready |
-| 42 | The Public Health and Welfare | Parser Ready |
-
----
-
-## Roadmap & Future Plans
-
-We are actively working to expand the system's breadth and depth:
-
-1.  **Full U.S. Code Coverage**: Expanding the elastic vector index to support all 54 U.S. Code titles.
-2.  **State Law Integration**: Incorporating state-level statutes, starting with major jurisdictions (CA, NY, TX, FL).
-3.  **Jurisdictional Cross-Referencing**: Enabling the agent to identify conflicts or overlaps between federal and state laws.
-4.  **Case Law Integration**: Moving beyond statutes to include relevant judicial precedents and court rulings.
+| Layer              | Technology                                        |
+|--------------------|---------------------------------------------------|
+| Frontend           | Next.js, React, Tailwind CSS                      |
+| Backend            | Python, FastAPI, Uvicorn, Pydantic                |
+| Agent Framework    | LangGraph (13-node workflow)                      |
+| Database           | PostgreSQL, SQLAlchemy, Alembic                   |
+| Cache / Queue      | Redis, Celery                                     |
+| Vector Store       | Qdrant (4 isolated collections)                   |
+| LLM / Embeddings   | OpenAI gpt-4o, text-embedding-3-small (1536-d)    |
+| Federal Corpus     | lxml, USLM XML parsing                            |
+| Case Law           | CourtListener REST API v4                         |
+| Document Parsing   | PyMuPDF, python-docx, pdfplumber                  |
+| Observability      | Prometheus, Grafana, Loki, Promtail               |
+| Infra              | Docker, Docker Compose, Nginx                     |
 
 ---
 
-## Mode Isolation Rules
+## Project Structure
 
-1. **Federal mode**: Retrieves ONLY from the federal U.S. Code corpus
-2. **Document mode**: Retrieves ONLY from the active uploaded document
-3. **Ambiguous queries**: System asks a clarifying question
-4. **Never mix**: Federal and document evidence are never combined
-5. **No silent fallback**: If retrieval is weak, the system says so explicitly
+```
+├── backend/
+│   ├── app/
+│   │   ├── api/                  # FastAPI routes
+│   │   ├── agents/               # LangGraph 13-node workflow
+│   │   ├── retrieval/            # FederalRetriever, CfrRetriever,
+│   │   │                         #   CaseLawRetriever, DocumentRetriever,
+│   │   │                         #   SourceMerger
+│   │   ├── ingestion/            # Federal XML, CFR XML, Case Law ingestion
+│   │   ├── document_ingestion/   # PDF/DOCX/TXT processing
+│   │   ├── database/             # SQLAlchemy models + Alembic
+│   │   ├── services/             # Business logic / service layer
+│   │   ├── observability/        # Prometheus metrics
+│   │   ├── workers/              # Celery tasks
+│   │   ├── core/                 # Config, settings, schemas, LLM client
+│   │   └── tests/                # Test suite
+│   ├── alembic/                  # Database migrations
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   ├── Dockerfile
+│   └── package.json
+├── infra/
+│   ├── docker-compose.yml
+│   ├── nginx.conf
+│   ├── prometheus/
+│   ├── grafana/
+│   └── .env.example
+├── DECISIONS.md                  # Architecture Decision Records (ADR-001–010)
+├── docs/
+└── sample_data/
+```
 
 ---
 

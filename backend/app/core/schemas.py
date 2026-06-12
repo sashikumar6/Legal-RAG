@@ -18,6 +18,9 @@ class QueryMode(str, Enum):
     FEDERAL = "federal"
     DOCUMENT = "document"
     AUTO = "auto"
+    CFR_REGULATION = "cfr_regulation"
+    CROSS_SOURCE = "cross_source"
+    CASE_LAW = "case_law"
 
 
 class ConfidenceLevel(str, Enum):

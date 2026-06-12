@@ -55,6 +55,10 @@ class GraphState(TypedDict, total=False):
     # Injected retriever instances (not serialized)
     federal_retriever: Optional[Any]
     document_retriever: Optional[Any]
+    cfr_retriever: Optional[Any]
+    case_law_retriever: Optional[Any]
+    source_merger: Optional[Any]
+    detected_conflicts: list[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -116,10 +120,25 @@ def classify_mode(state: GraphState) -> GraphState:
         "civil rights", "commerce", "judiciary", "statute",
     ]
 
+    # CFR mode indicators
+    cfr_indicators = [
+        "c.f.r.", " cfr ", "cfr §", "code of federal regulations",
+        "treasury reg", "treasury regulation", "treas. reg",
+        "irs regulation", "labor regulation", "26 cfr", "29 cfr",
+    ]
+
+    # Cross-source indicators (statute + regulation together)
+    cross_indicators = [
+        "statute and regulation", "code and regulation", "law and regulation",
+        "usc and cfr", "statute and cfr",
+    ]
+
     doc_score = sum(1 for ind in doc_indicators if ind in query_lower)
     fed_score = sum(1 for ind in federal_indicators if ind in query_lower)
+    cfr_score = sum(1 for ind in cfr_indicators if ind in query_lower)
+    cross_score = sum(1 for ind in cross_indicators if ind in query_lower)
 
-    if doc_score > 0 and fed_score == 0:
+    if doc_score > 0 and fed_score == 0 and cfr_score == 0:
         state["needs_clarification"] = True
         state["clarification_question"] = (
             "It seems you're asking about a specific document. "
@@ -127,6 +146,27 @@ def classify_mode(state: GraphState) -> GraphState:
             "then ask your question."
         )
         state["resolved_mode"] = QueryMode.DOCUMENT
+        return state
+
+    # Case law indicators
+    case_law_indicators = [
+        "court held", "ruling", "precedent", "circuit", "supreme court",
+        "v.", "opinion", "judge", "decision", "case",
+    ]
+    case_law_score = sum(1 for ind in case_law_indicators if ind in query_lower)
+
+    if (cross_score > 0
+            or (cfr_score > 0 and fed_score > 0)
+            or (case_law_score > 0 and (fed_score > 0 or cfr_score > 0))):
+        state["resolved_mode"] = QueryMode.CROSS_SOURCE
+        return state
+
+    if cfr_score > 0:
+        state["resolved_mode"] = QueryMode.CFR_REGULATION
+        return state
+
+    if case_law_score > 0 and doc_score == 0:
+        state["resolved_mode"] = QueryMode.CASE_LAW
         return state
 
     if fed_score > 0 or doc_score == 0:
@@ -178,7 +218,7 @@ def extract_entities(state: GraphState) -> GraphState:
 
 def detect_title_hints(state: GraphState) -> GraphState:
     """Detect which U.S. Code titles the query relates to."""
-    if state.get("resolved_mode") != QueryMode.FEDERAL:
+    if state.get("resolved_mode") not in (QueryMode.FEDERAL, QueryMode.CROSS_SOURCE, QueryMode.CASE_LAW):
         state["title_hints"] = []
         return state
 
@@ -265,6 +305,15 @@ def make_plan(state: GraphState) -> GraphState:
     elif mode == QueryMode.DOCUMENT:
         plan["upload_id"] = state.get("upload_id")
         plan["document_scope"] = state.get("document_scope")
+    elif mode == QueryMode.CFR_REGULATION:
+        plan["title_filter"] = state.get("title_hints") or None
+        plan["entities"] = state.get("entities", [])
+    elif mode == QueryMode.CROSS_SOURCE:
+        plan["title_filter"] = state.get("title_hints") or None
+        plan["entities"] = state.get("entities", [])
+    elif mode == QueryMode.CASE_LAW:
+        plan["title_filter"] = state.get("title_hints") or None
+        plan["entities"] = state.get("entities", [])
 
     state["retrieval_plan"] = plan
     return state
@@ -331,6 +380,90 @@ def retrieve_context(state: GraphState) -> GraphState:
             ]
         else:
             logger.warning("Document retriever not available or no upload_id in graph state")
+    elif mode == QueryMode.CFR_REGULATION:
+        retriever = state.get("cfr_retriever")
+        if retriever is not None:
+            results = retriever.retrieve(
+                query=state.get("query", ""),
+                top_k=plan.get("top_k", settings.retrieval_top_k),
+                title_filter=plan.get("title_filter") or None,
+                score_threshold=0.0,
+            )
+            chunks_raw = [
+                {"chunk_id": c.chunk_id, "text": c.text, "score": c.score, "metadata": c.metadata}
+                for c in results
+            ]
+        else:
+            logger.warning("CFR retriever not available in graph state")
+    elif mode == QueryMode.CASE_LAW:
+        retriever = state.get("case_law_retriever")
+        if retriever is not None:
+            results = retriever.retrieve(
+                query=state.get("query", ""),
+                top_k=plan.get("top_k", settings.retrieval_top_k),
+                title_filter=plan.get("title_filter") or None,
+                score_threshold=0.0,
+            )
+            chunks_raw = [
+                {"chunk_id": c.chunk_id, "text": c.text, "score": c.score, "metadata": c.metadata}
+                for c in results
+            ]
+        else:
+            logger.warning("Case law retriever not available in graph state")
+    elif mode == QueryMode.CROSS_SOURCE:
+        fed_retriever = state.get("federal_retriever")
+        cfr_ret = state.get("cfr_retriever")
+        cl_ret = state.get("case_law_retriever")
+        merger = state.get("source_merger")
+        federal_chunks: list[dict] = []
+        cfr_chunks: list[dict] = []
+        case_law_chunks: list[dict] = []
+        if fed_retriever is not None:
+            fed_results = fed_retriever.retrieve(
+                query=state.get("query", ""),
+                top_k=plan.get("top_k", settings.retrieval_top_k),
+                title_filter=plan.get("title_filter") or None,
+                score_threshold=0.0,
+            )
+            federal_chunks = [
+                {"chunk_id": c.chunk_id, "text": c.text, "score": c.score, "metadata": c.metadata}
+                for c in fed_results
+            ]
+        if cfr_ret is not None:
+            cfr_results = cfr_ret.retrieve(
+                query=state.get("query", ""),
+                top_k=plan.get("top_k", settings.retrieval_top_k),
+                title_filter=plan.get("title_filter") or None,
+                score_threshold=0.0,
+            )
+            cfr_chunks = [
+                {"chunk_id": c.chunk_id, "text": c.text, "score": c.score, "metadata": c.metadata}
+                for c in cfr_results
+            ]
+        if cl_ret is not None:
+            cl_results = cl_ret.retrieve(
+                query=state.get("query", ""),
+                top_k=plan.get("top_k", settings.retrieval_top_k),
+                title_filter=plan.get("title_filter") or None,
+                score_threshold=0.0,
+            )
+            case_law_chunks = [
+                {"chunk_id": c.chunk_id, "text": c.text, "score": c.score, "metadata": c.metadata}
+                for c in cl_results
+            ]
+        if merger is not None:
+            merge_result = merger.merge(federal_chunks, cfr_chunks, case_law_chunks)
+            chunks_raw = merge_result["chunks"]
+            state["detected_conflicts"] = merge_result["conflicts"]
+        else:
+            # Fallback: simple merge by score when SourceMerger not injected
+            merged = sorted(
+                federal_chunks + cfr_chunks + case_law_chunks,
+                key=lambda c: c.get("score", 0),
+                reverse=True,
+            )
+            chunks_raw = merged[:plan.get("top_k", settings.retrieval_top_k)]
+            state["detected_conflicts"] = []
 
     state["retrieved_chunks"] = chunks_raw
     if chunks_raw:
@@ -411,6 +544,45 @@ CRITICAL RULES:
 
 You must ground every statement in the provided document evidence. Do not speculate beyond what the evidence supports."""
 
+_CFR_SYSTEM_PROMPT = """You are a legal research assistant specializing in federal regulations (Code of Federal Regulations).
+
+CRITICAL RULES:
+1. Answer ONLY based on the retrieved evidence provided below.
+2. Cite specific sources for EVERY material claim using [Regulation: X C.F.R. § Y] format.
+3. NEVER fabricate citations or invent section numbers.
+4. NEVER present your response as legal advice.
+5. If evidence is insufficient to fully answer, say so explicitly.
+6. Use precise regulatory language but remain accessible.
+
+You must ground every statement in the provided evidence. If a claim cannot be supported by the evidence, do not make it."""
+
+_CROSS_SOURCE_SYSTEM_PROMPT = """You are a legal research assistant with access to U.S. Code statutes, Code of Federal Regulations, and federal case law.
+
+CRITICAL RULES:
+1. Answer ONLY based on the retrieved evidence provided below.
+2. For statutory sources, cite as [Statute: X U.S.C. § Y].
+3. For regulatory sources, cite as [Regulation: X C.F.R. § Y].
+4. For case law sources, cite as [Case: Case Name, Volume Reporter Page (Court Year)].
+5. NEVER fabricate citations or invent section numbers or case names.
+6. NEVER present your response as legal advice.
+7. Clearly distinguish between statute, regulation, and case law when cited.
+8. If evidence is insufficient to fully answer, say so explicitly.
+
+You must ground every statement in the provided evidence. If a claim cannot be supported by the evidence, do not make it."""
+
+_CASE_LAW_SYSTEM_PROMPT = """You are a legal research assistant specializing in federal case law and judicial precedent.
+
+CRITICAL RULES:
+1. Answer ONLY based on the retrieved judicial opinions provided below.
+2. Cite specific cases for EVERY material claim using [Case: Case Name, Volume Reporter Page (Court Year)] format.
+3. NEVER fabricate case citations or invent court decisions.
+4. NEVER present your response as legal advice.
+5. If evidence is insufficient to fully answer, say so explicitly.
+6. Clearly indicate the court and year for each cited decision.
+7. Note when a precedent may have been limited or overruled if evidence suggests so.
+
+You must ground every statement in the provided case evidence. If a claim cannot be supported by the evidence, do not make it."""
+
 
 def generate_answer(state: GraphState) -> GraphState:
     """Generate an answer grounded in retrieved evidence using real OpenAI LLM.
@@ -434,15 +606,57 @@ def generate_answer(state: GraphState) -> GraphState:
     evidence_parts: list[str] = []
     for i, chunk in enumerate(chunks):
         meta = chunk.get("metadata", {})
+        chunk_source = meta.get("source_type", "")
+
         if mode == QueryMode.FEDERAL:
             citation = meta.get("canonical_citation", f"Source {i+1}")
             title = meta.get("title_name", "")
             heading = meta.get("heading", "")
-            label = f"[{citation}]"
+            label = f"[Statute: {citation}]"
             if title:
                 label += f" (Title: {title})"
             if heading:
                 label += f" — {heading}"
+            evidence_parts.append(f"{label}:\n{chunk.get('text', '')}")
+        elif mode == QueryMode.CFR_REGULATION or chunk_source == "cfr":
+            citation = meta.get("canonical_citation", f"Source {i+1}")
+            title_name = meta.get("title_name", "")
+            heading = meta.get("heading", "")
+            label = f"[Regulation: {citation}]"
+            if title_name:
+                label += f" (Title {meta.get('title_number', '')}: {title_name})"
+            if heading:
+                label += f" — {heading}"
+            evidence_parts.append(f"{label}:\n{chunk.get('text', '')}")
+        elif mode == QueryMode.CASE_LAW:
+            citation = meta.get("canonical_citation", f"Source {i+1}")
+            court = meta.get("court", "")
+            date_filed = meta.get("date_filed", "")
+            year = date_filed[:4] if date_filed else ""
+            label = f"[Case: {citation}]"
+            if court and year:
+                label += f" ({court}, {year})"
+            evidence_parts.append(f"{label}:\n{chunk.get('text', '')}")
+        elif mode == QueryMode.CROSS_SOURCE:
+            citation = meta.get("canonical_citation", f"Source {i+1}")
+            if chunk_source == "cfr":
+                title_name = meta.get("title_name", "")
+                heading = meta.get("heading", "")
+                label = f"[Regulation: {citation}]"
+                if title_name:
+                    label += f" (Title {meta.get('title_number', '')}: {title_name})"
+                if heading:
+                    label += f" — {heading}"
+            elif chunk_source == "case_law":
+                label = f"[Case: {citation}]"
+            else:
+                title_name = meta.get("title_name", "")
+                heading = meta.get("heading", "")
+                label = f"[Statute: {citation}]"
+                if title_name:
+                    label += f" (Title: {title_name})"
+                if heading:
+                    label += f" — {heading}"
             evidence_parts.append(f"{label}:\n{chunk.get('text', '')}")
         else:
             page = meta.get("page_number", "?")
@@ -458,7 +672,16 @@ def generate_answer(state: GraphState) -> GraphState:
 
     evidence_text = "\n\n---\n\n".join(evidence_parts)
 
-    system_prompt = _FEDERAL_SYSTEM_PROMPT if mode == QueryMode.FEDERAL else _DOCUMENT_SYSTEM_PROMPT
+    if mode == QueryMode.FEDERAL:
+        system_prompt = _FEDERAL_SYSTEM_PROMPT
+    elif mode == QueryMode.CFR_REGULATION:
+        system_prompt = _CFR_SYSTEM_PROMPT
+    elif mode == QueryMode.CROSS_SOURCE:
+        system_prompt = _CROSS_SOURCE_SYSTEM_PROMPT
+    elif mode == QueryMode.CASE_LAW:
+        system_prompt = _CASE_LAW_SYSTEM_PROMPT
+    else:
+        system_prompt = _DOCUMENT_SYSTEM_PROMPT
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -496,13 +719,37 @@ def generate_answer(state: GraphState) -> GraphState:
     citations = []
     for chunk in chunks:
         meta = chunk.get("metadata", {})
+        chunk_source = meta.get("source_type", "")
+
+        # Determine citation source_type for mode isolation checks in verify_answer
+        if mode == QueryMode.CROSS_SOURCE:
+            cit_source_type = chunk_source if chunk_source in ("federal", "cfr", "case_law") else "federal"
+        elif mode == QueryMode.CFR_REGULATION:
+            cit_source_type = "cfr"
+        elif mode == QueryMode.CASE_LAW:
+            cit_source_type = "case_law"
+        else:
+            cit_source_type = str(mode)
+
         citation: dict[str, Any] = {
-            "source_type": mode,
+            "source_type": cit_source_type,
             "document_id": chunk.get("chunk_id", ""),
             "text": chunk.get("text", "")[:300],
             "relevance_score": chunk.get("score", 0),
         }
-        if mode == QueryMode.FEDERAL:
+        if mode == QueryMode.CASE_LAW or chunk_source == "case_law":
+            citation.update({
+                "canonical_citation": meta.get("canonical_citation"),
+                "heading": meta.get("case_name"),
+            })
+        elif mode in (QueryMode.FEDERAL, QueryMode.CROSS_SOURCE) and chunk_source not in ("cfr", "case_law"):
+            citation.update({
+                "title_number": meta.get("title_number"),
+                "section_number": meta.get("section_number"),
+                "canonical_citation": meta.get("canonical_citation"),
+                "heading": meta.get("heading"),
+            })
+        elif mode == QueryMode.CFR_REGULATION or chunk_source == "cfr":
             citation.update({
                 "title_number": meta.get("title_number"),
                 "section_number": meta.get("section_number"),
@@ -518,6 +765,20 @@ def generate_answer(state: GraphState) -> GraphState:
         citations.append(citation)
 
     state["citations"] = citations
+
+    # Append conflict warnings surfaced by SourceMerger for CROSS_SOURCE queries
+    if mode == QueryMode.CROSS_SOURCE:
+        conflicts = state.get("detected_conflicts") or []
+        if conflicts and state.get("draft_answer"):
+            conflict_lines = [
+                f"⚠ Note: conflicting interpretations found between "
+                f"{c['source_a']} and {c['source_b']} on {c['topic']}."
+                for c in conflicts
+            ]
+            state["draft_answer"] = (
+                state["draft_answer"] + "\n\n" + "\n".join(conflict_lines)
+            )
+
     return state
 
 
@@ -572,8 +833,14 @@ def verify_answer(state: GraphState) -> GraphState:
         source_type = cit.get("source_type", "")
         if mode == QueryMode.FEDERAL and source_type == "document":
             issues.append("Mode violation: document citation in federal mode")
-        elif mode == QueryMode.DOCUMENT and source_type == "federal":
-            issues.append("Mode violation: federal citation in document mode")
+        elif mode == QueryMode.DOCUMENT and source_type in ("federal", "cfr"):
+            issues.append(f"Mode violation: {source_type} citation in document mode")
+        elif mode == QueryMode.CFR_REGULATION and source_type in ("federal", "document"):
+            issues.append(f"Mode violation: {source_type} citation in cfr_regulation mode")
+        elif mode == QueryMode.CROSS_SOURCE and source_type == "document":
+            issues.append("Mode violation: document citation in cross_source mode")
+        elif mode == QueryMode.CASE_LAW and source_type in ("federal", "cfr", "document"):
+            issues.append(f"Mode violation: {source_type} citation in case_law mode")
 
     # Check confidence threshold
     confidence = state.get("confidence", ConfidenceLevel.INSUFFICIENT)

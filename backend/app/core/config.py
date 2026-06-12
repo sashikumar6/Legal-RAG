@@ -16,13 +16,6 @@ class Environment(str, Enum):
     PRODUCTION = "production"
 
 
-class QueryMode(str, Enum):
-    """Strictly isolated query modes."""
-    FEDERAL = "federal"
-    DOCUMENT = "document"
-    AUTO = "auto"
-
-
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
@@ -51,6 +44,7 @@ class Settings(BaseSettings):
     qdrant_api_key: Optional[str] = None
     qdrant_federal_collection: str = "federal_corpus"
     qdrant_document_collection: str = "uploaded_documents"
+    qdrant_cfr_collection: str = "cfr_corpus"
 
     # Developer fallback: use local-file Qdrant instead of Docker.
     # Set to true ONLY for local development when Docker is unavailable.
@@ -83,6 +77,29 @@ class Settings(BaseSettings):
     @field_validator("federal_titles", mode="before")
     @classmethod
     def parse_federal_titles(cls, v: Any) -> list[int]:
+        if isinstance(v, str):
+            if v.startswith("["):
+                import json
+                try:
+                    return [int(x) for x in json.loads(v)]
+                except Exception:
+                    pass
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v
+
+    # CFR Corpus
+    cfr_titles: list[int] = [26, 29]
+    cfr_download_dir: str = "./cfr_data"
+    cfr_year: int = 2024
+
+    # Case Law Corpus
+    qdrant_case_law_collection: str = "case_law_corpus"
+    courtlistener_api_key: str = ""
+    case_law_max_opinions_per_title: int = 500
+
+    @field_validator("cfr_titles", mode="before")
+    @classmethod
+    def parse_cfr_titles(cls, v: Any) -> list[int]:
         if isinstance(v, str):
             if v.startswith("["):
                 import json
