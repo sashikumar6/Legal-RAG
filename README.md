@@ -29,38 +29,53 @@ TBD values are filled after the first eval run against a live Qdrant instance.
 
 ```mermaid
 flowchart LR
-    User([User]) --> FE[Next.js Frontend]
-    FE --> API[FastAPI :8000]
-    API --> LG[LangGraph Router]
 
-    LG -- FEDERAL --> FR[federal_retriever]
-    LG -- CFR_REGULATION --> CR[cfr_retriever]
-    LG -- CASE_LAW --> CL[case_law_retriever]
-    LG -- CROSS_SOURCE --> SM[source_merger]
-    LG -- DOCUMENT --> DR[document_retriever]
+    %% Client
+    User([User]) --> FE["Next.js Frontend"]
+    FE --> API["FastAPI API"]
 
+    %% Orchestration
+    API --> LG["LangGraph Router"]
+
+    %% Retrieval
+    LG -->|Federal| FR["Federal Retriever"]
+    LG -->|CFR| CR["CFR Retriever"]
+    LG -->|Case Law| CLR["Case Law Retriever"]
+    LG -->|Documents| DR["Document Retriever"]
+    LG -->|Cross Source| SM["Source Merger"]
+
+    %% Cross-source routing
     SM --> FR
     SM --> CR
-    SM --> CL
-    SM --> CD[conflict detection]
+    SM --> CLR
+    SM --> CD["Conflict Detection"]
 
-    FR --> QF[(federal_corpus\nQdrant)]
-    CR --> QC[(cfr_corpus\nQdrant)]
-    CL --> QL[(case_law_corpus\nQdrant)]
-    DR --> QD[(user_docs\nQdrant)]
+    %% Vector databases
+    FR --> QF[("Federal Corpus<br/>Qdrant")]
+    CR --> QC[("CFR Corpus<br/>Qdrant")]
+    CLR --> QCL[("Case Law Corpus<br/>Qdrant")]
+    DR --> QD[("User Documents<br/>Qdrant")]
 
-    QF --> LLM[gpt-4o]
+    %% LLM
+    QF --> LLM["GPT-4o"]
     QC --> LLM
-    QL --> LLM
+    QCL --> LLM
     QD --> LLM
     CD --> LLM
-    LLM --> Resp([Response + Citations])
 
-    API --> PROM[/metrics → Prometheus :9090]
-    Celery[Celery Workers] --> QF
+    LLM --> RESP([Response + Citations])
+
+    %% Background workers
+    Celery["Celery Workers"] --> QF
     Celery --> QC
-    Celery --> QL
+    Celery --> QCL
     Celery --> QD
+
+    %% Observability
+    API --> Metrics["/metrics"]
+    Metrics --> Prom["Prometheus"]
+    Prom --> Grafana["Grafana"]
+
 ```
 
 ---
