@@ -28,6 +28,7 @@ class ConfidenceLevel(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     INSUFFICIENT = "insufficient"
+    UNVERIFIED = "unverified"
 
 
 class IngestionStatus(str, Enum):

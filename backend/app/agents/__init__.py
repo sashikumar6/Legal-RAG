@@ -583,6 +583,47 @@ CRITICAL RULES:
 
 You must ground every statement in the provided case evidence. If a claim cannot be supported by the evidence, do not make it."""
 
+_GENERAL_KNOWLEDGE_SYSTEM_PROMPT = """You are a legal information assistant. The user's question could not be answered from the indexed legal corpus (no matching evidence was retrieved).
+
+Answer from your general knowledge of U.S. law as helpfully as you can, but:
+1. Do NOT invent or guess specific section numbers, case citations, or reporter cites unless you are highly confident they are accurate.
+2. Prefer describing legal concepts and general rules over precise citations you cannot verify.
+3. Keep the answer concise and in plain language.
+4. Do not present this as legal advice.
+
+This answer will be labeled to the user as unverified general knowledge, not sourced from the indexed corpus."""
+
+
+def _generate_unverified_answer(query: str) -> Optional[str]:
+    """Fall back to the LLM's own knowledge when retrieval/verification failed.
+
+    Only used for non-document modes — document Q&A must stay strictly grounded
+    in the uploaded file, since an ungrounded guess about a specific contract's
+    terms is misleading in a way general legal information is not.
+    """
+    try:
+        from app.core.llm import chat_completion, check_openai_configured
+
+        if not check_openai_configured():
+            return None
+
+        answer_text, _ = chat_completion(
+            [
+                {"role": "system", "content": _GENERAL_KNOWLEDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            operation="generate_unverified_answer",
+        )
+        if not answer_text:
+            return None
+        return (
+            "⚠️ **Unverified — general knowledge, not sourced from the indexed corpus.** "
+            "Independently confirm any citation before relying on it.\n\n" + answer_text
+        )
+    except Exception as e:
+        logger.warning(f"Unverified fallback generation failed: {e}")
+        return None
+
 
 def generate_answer(state: GraphState) -> GraphState:
     """Generate an answer grounded in retrieved evidence using real OpenAI LLM.
@@ -910,7 +951,19 @@ def retry_or_finalize(state: GraphState) -> GraphState:
         state["final_answer"] = state["draft_answer"]
         return state
 
-    # Exhausted retries or failed retrieval/verification
+    # Exhausted retries or failed retrieval/verification.
+    # Document mode stays strictly grounded — never guess at a specific
+    # uploaded file's contents. Other modes may fall back to labeled,
+    # unverified general knowledge rather than a bare "I don't know".
+    mode = state.get("resolved_mode")
+    if mode != QueryMode.DOCUMENT:
+        fallback = _generate_unverified_answer(state.get("query", ""))
+        if fallback:
+            state["final_answer"] = fallback
+            state["confidence"] = ConfidenceLevel.UNVERIFIED
+            state["citations"] = []
+            return state
+
     state["final_answer"] = (
         "I was unable to find sufficient evidence to answer your question with confidence. "
         "The retrieved evidence did not meet the quality threshold required for a reliable answer.\n\n"
