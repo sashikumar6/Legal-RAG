@@ -146,6 +146,22 @@ async def search_conversations(
     return list(result.scalars().unique().all())
 
 
+async def list_conversations(
+    db: AsyncSession, user_id: uuid.UUID, limit: int = 20, offset: int = 0
+) -> list[Conversation]:
+    """Return a user's conversations in most-recently-updated order."""
+    stmt = (
+        select(Conversation)
+        .join(Session, Conversation.session_id == Session.id)
+        .where(Session.user_id == user_id)
+        .order_by(Conversation.updated_at.desc(), Conversation.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().unique().all())
+
+
 async def get_owned_conversation_with_messages(
     db: AsyncSession, user_id: uuid.UUID, conversation_id: str
 ) -> Optional[tuple[Conversation, list[Message]]]:

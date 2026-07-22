@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 from app.core.auth import AuthIdentity, get_current_user_optional
 from app.core.config import settings
@@ -116,6 +117,34 @@ async def chat(
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+@router.post("/chat/stream", tags=["chat"])
+async def chat_stream(
+    request: ChatRequest,
+    identity: Optional[AuthIdentity] = Depends(get_current_user_optional),
+):
+    """Stream live research status and answer tokens using server-sent events."""
+    async def event_stream():
+        try:
+            service = _get_chat_service()
+            async for item in service.stream_query(request, identity=identity):
+                event = item["event"]
+                data = json.dumps(item["data"])
+                yield f"event: {event}\ndata: {data}\n\n"
+        except Exception as e:
+            logger.error(f"Streaming chat error: {e}")
+            yield f"event: error\ndata: {json.dumps({'message': 'Unable to complete the research request.'})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,27 @@ interface Props {
 export function AnalysisPanel({ workspaces, setWorkspaces, activeWorkspaceId, citations }: Props) {
   const activeDoc = workspaces.find(w => w.id === activeWorkspaceId);
 
+  const downloadAudit = () => {
+    const sourceLines = citations.length
+      ? citations.map((citation) => `- ${citation.canonical_citation || citation.heading || 'Retrieved source'}`).join('\n')
+      : '- No sources were cited in this session.';
+    const report = [
+      '# Document Research Audit',
+      '',
+      `Generated: ${new Date().toLocaleString()}`,
+      `Active document: ${activeDoc?.name || 'None selected'}`,
+      '',
+      '## Referenced Sources',
+      sourceLines,
+    ].join('\n');
+    const url = URL.createObjectURL(new Blob([report], { type: 'text/markdown' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'digital-jurist-audit.md';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="w-80 bg-slate-50 border-l border-slate-200 p-8 flex flex-col space-y-10 overflow-y-auto">
       <h3 className="text-sm font-bold tracking-widest text-slate-400 uppercase">
@@ -70,33 +91,14 @@ export function AnalysisPanel({ workspaces, setWorkspaces, activeWorkspaceId, ci
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
-          {/* Default static insights */}
-          <div>
-            <span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-bold uppercase tracking-widest mb-2">
-              Key Entity Detect
-            </span>
-            <h4 className="font-bold text-sm text-slate-900 mb-1">Henderson, Sarah L.</h4>
-            <p className="text-xs text-slate-500 font-medium leading-relaxed">
-              Mentioned in 12 documents. Primary connection: Liability Clause 4.2.
-            </p>
-          </div>
-
-          <div>
-            <span className="inline-block px-2 py-0.5 rounded bg-orange-100 text-orange-800 text-[10px] font-bold uppercase tracking-widest mb-2">
-              Risk Alert
-            </span>
-            <h4 className="font-bold text-sm text-slate-900 mb-1">Inconsistent Dates</h4>
-            <p className="text-xs text-slate-500 font-medium leading-relaxed">
-              Discrepancy found between Exhibit A and Merger Agreement signature page.
-            </p>
-          </div>
+        <div className="border-t border-slate-200 pt-5 text-xs leading-5 text-slate-500">
+          Upload a document and ask a question to see only evidence actually retrieved from that document.
         </div>
       )}
 
       <div className="mt-8 space-y-3">
         <button 
-          onClick={() => alert('Downloading full audit report...')}
+          onClick={downloadAudit}
           className="w-full py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-bold uppercase tracking-widest transition-colors shadow-sm"
         >
           Download Full Audit

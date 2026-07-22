@@ -1,85 +1,55 @@
-import { CheckCircle2, Bookmark, Scale } from 'lucide-react';
+import { BookOpenText, Landmark, Scale } from 'lucide-react';
 import type { ChatCitation } from '@/lib/api';
 
 interface PanelProps {
   citations?: ChatCitation[];
 }
 
+const sourceIcon = {
+  federal: Landmark,
+  cfr: BookOpenText,
+  case_law: Scale,
+  document: BookOpenText,
+};
+
 export function KnowledgePanel({ citations = [] }: PanelProps) {
-  if (citations.length > 0) {
-    return (
-      <div className="w-80 bg-slate-50 border-l border-slate-200 p-8 flex flex-col space-y-8 overflow-y-auto">
-        <h3 className="text-sm font-bold tracking-widest text-slate-400 uppercase">
-          Referenced Sources
-        </h3>
-        
-        <div className="space-y-6">
-          {citations.map((c, i) => (
-            <div key={i} className="animate-fade-in group" style={{ animationDelay: `${i * 100}ms` }}>
-              <span className="inline-block px-2 py-0.5 rounded bg-orange-100 text-orange-800 text-[10px] font-bold uppercase tracking-widest mb-2">
-                {c.source_type}
-              </span>
-              <h4 className="font-bold text-sm text-slate-900 mb-1 flex items-start gap-2">
-                <Bookmark size={14} className="mt-1 flex-shrink-0 text-slate-400" />
-                <span>{c.canonical_citation} {c.title_number && c.section_number ? `(Title ${c.title_number}, Sec ${c.section_number})` : ''}</span>
-              </h4>
-              <p className="text-xs text-slate-500 font-medium leading-relaxed italic border-l-2 border-slate-300 pl-3 py-1">
-                &quot;{c.text.length > 200 ? c.text.substring(0, 200) + '...' : c.text}&quot;
-              </p>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="w-80 bg-slate-50 border-l border-slate-200 p-8 flex flex-col space-y-10 overflow-y-auto hidden lg:flex">
-      <div>
-        <h3 className="text-sm font-bold tracking-widest text-slate-400 uppercase mb-4">
-          Knowledge Stats
-        </h3>
-        
-        <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm mb-4">
-          <div className="text-3xl font-bold text-slate-900 mb-1">1,240</div>
-          <div className="text-[10px] font-bold tracking-widest text-slate-400 uppercase">Precedents Indexed</div>
-        </div>
-        
-        <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm">
-          <div className="text-3xl font-bold text-slate-900 mb-1">42</div>
-          <div className="text-[10px] font-bold tracking-widest text-slate-400 uppercase">Active Briefs</div>
-        </div>
+    <aside className="hidden w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-[#f5f6f2] p-6 xl:flex xl:flex-col">
+      <div className="mb-6">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Referenced sources</p>
+        <p className="mt-2 font-serif text-2xl text-emerald-950">{citations.length || '—'}</p>
+        <p className="text-xs text-slate-500">{citations.length ? 'sources supporting this response' : 'sources appear after research completes'}</p>
       </div>
 
-      <div>
-        <h3 className="text-sm font-bold tracking-widest text-slate-400 uppercase mb-4">
-          Curator Guidelines
-        </h3>
-        <ul className="space-y-4">
-          <li className="flex items-start space-x-3 text-sm text-slate-600">
-            <CheckCircle2 size={16} className="text-orange-600 flex-shrink-0 mt-0.5" />
-            <span>Cite specific case numbers for faster retrieval and deeper analysis.</span>
-          </li>
-          <li className="flex items-start space-x-3 text-sm text-slate-600">
-            <CheckCircle2 size={16} className="text-orange-600 flex-shrink-0 mt-0.5" />
-            <span>Use 'Comparison Mode' to see differences between state jurisdictions.</span>
-          </li>
-          <li className="flex items-start space-x-3 text-sm text-slate-600">
-            <CheckCircle2 size={16} className="text-orange-600 flex-shrink-0 mt-0.5" />
-            <span>Knowledge Mode data is updated every 24 hours with new court filings.</span>
-          </li>
-        </ul>
-      </div>
-
-      <div className="mt-8 rounded-xl overflow-hidden shadow-sm relative group cursor-pointer border border-slate-800">
-        <div className="h-40 bg-slate-900 bg-[url('https://images.unsplash.com/photo-1505664177922-2418fc3c7a0c?q=80&w=400&auto=format&fit=crop')] bg-cover bg-center blend-overlay opacity-80 transition-opacity group-hover:opacity-100"></div>
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/90 to-transparent flex items-end p-5">
-          <div>
-            <h4 className="text-white font-bold mb-1">Case Archives</h4>
-            <p className="text-slate-300 text-xs font-medium">Browse the digital collection</p>
-          </div>
+      {citations.length > 0 ? (
+        <div className="space-y-5">
+          {citations.map((citation, index) => {
+            const Icon = sourceIcon[citation.source_type as keyof typeof sourceIcon] || BookOpenText;
+            const title = citation.canonical_citation || citation.heading || 'Retrieved source';
+            return (
+              <article key={`${citation.document_id}-${index}`} className="border-b border-slate-200 pb-5 last:border-b-0">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-800">
+                  <Icon size={13} />
+                  {citation.source_type.replace('_', ' ')}
+                </div>
+                <h3 className="text-sm font-semibold leading-5 text-slate-800">{title}</h3>
+                <p className="mt-2 border-l-2 border-emerald-900/20 pl-3 text-xs leading-5 text-slate-500">
+                  “{citation.text.length > 200 ? `${citation.text.slice(0, 200)}…` : citation.text}”
+                </p>
+              </article>
+            );
+          })}
         </div>
-      </div>
-    </div>
+      ) : (
+        <div className="space-y-5 border-t border-slate-200 pt-5 text-sm leading-6 text-slate-600">
+          <p>Each response is grounded in the isolated source selected for your question.</p>
+          <ul className="space-y-3 text-xs text-slate-500">
+            <li className="flex gap-2"><Landmark size={15} className="mt-0.5 text-emerald-800" /> U.S. Code statutes</li>
+            <li className="flex gap-2"><BookOpenText size={15} className="mt-0.5 text-emerald-800" /> Federal regulations</li>
+            <li className="flex gap-2"><Scale size={15} className="mt-0.5 text-emerald-800" /> Federal precedent</li>
+          </ul>
+        </div>
+      )}
+    </aside>
   );
 }

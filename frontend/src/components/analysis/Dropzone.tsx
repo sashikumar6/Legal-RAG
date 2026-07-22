@@ -1,18 +1,32 @@
 import { CloudUpload, FileText, File, FileCode } from 'lucide-react';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 
 export function Dropzone({ onUpload }: { onUpload: (f: File) => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const acceptFile = (file?: File) => {
+    if (file) onUpload(file);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      onUpload(e.target.files[0]);
+      acceptFile(e.target.files[0]);
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
-    <div className="border-2 border-dashed border-slate-300 rounded-2xl bg-white p-12 text-center flex flex-col items-center justify-center mb-10 transition-colors hover:border-slate-400">
+    <div
+      onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
+      onDragLeave={() => setIsDragging(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setIsDragging(false);
+        acceptFile(event.dataTransfer.files[0]);
+      }}
+      className={`mb-10 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-white p-12 text-center transition-colors ${isDragging ? 'border-emerald-800 bg-emerald-50' : 'border-slate-300 hover:border-slate-400'}`}
+    >
       <input 
         type="file" 
         className="hidden" 

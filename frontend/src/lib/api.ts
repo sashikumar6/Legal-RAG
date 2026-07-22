@@ -10,6 +10,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 }
 
 export interface ChatCitation {
+  document_id: string;
   canonical_citation: string;
   source_type: string;
   title_number?: number;
@@ -27,6 +28,31 @@ export interface ChatResponse {
   citations: ChatCitation[];
   session_id: string;
   conversation_id: string | null;
+  clarification_needed?: boolean;
+  clarification_question?: string | null;
+}
+
+export type ResearchStage =
+  | 'preparing'
+  | 'routing'
+  | 'planning'
+  | 'retrieving'
+  | 'retrieved'
+  | 'generating'
+  | 'verifying'
+  | 'fallback'
+  | 'complete';
+
+export interface ResearchStatus {
+  stage: ResearchStage;
+  label: string;
+  detail?: string;
+}
+
+export interface ChatStreamHandlers {
+  onStatus?: (status: ResearchStatus) => void;
+  onToken?: (text: string) => void;
+  onComplete?: (response: ChatResponse) => void;
 }
 
 export interface UploadResponse {
@@ -48,6 +74,11 @@ export interface HistoryResultItem {
 export interface HistorySearchResponse {
   query: string;
   results: HistoryResultItem[];
+}
+
+export interface ConversationListResponse {
+  results: HistoryResultItem[];
+  next_offset: number | null;
 }
 
 export interface HistoryMessageItem {
@@ -96,6 +127,67 @@ export const LegalAI = {
     return res.json();
   },
 
+  chatStream: async (
+    query: string,
+    mode: 'federal' | 'document' | 'auto' = 'auto',
+    upload_id?: string,
+    conversation_id?: string | null,
+    handlers: ChatStreamHandlers = {},
+  ): Promise<ChatResponse> => {
+    const res = await fetch(`${API_BASE_URL}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(await authHeaders()),
+      },
+      body: JSON.stringify({
+        query,
+        mode,
+        upload_id,
+        session_id: getOrCreateLocalSessionId(),
+        conversation_id: conversation_id || undefined,
+      }),
+    });
+
+    if (!res.ok || !res.body) {
+      const error = await res.text();
+      throw new Error(`Streaming chat API error: ${res.statusText} - ${error}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed: ChatResponse | null = null;
+
+    const dispatch = (rawEvent: string) => {
+      const lines = rawEvent.split('\n');
+      const event = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
+      const dataLine = lines.find((line) => line.startsWith('data:'));
+      if (!dataLine) return;
+      const data = JSON.parse(dataLine.slice(5).trim());
+      if (event === 'status') handlers.onStatus?.(data as ResearchStatus);
+      if (event === 'token') handlers.onToken?.(data.text || '');
+      if (event === 'error') throw new Error(data.message || 'Streaming request failed');
+      if (event === 'complete') {
+        completed = data as ChatResponse;
+        handlers.onComplete?.(completed);
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      events.filter(Boolean).forEach(dispatch);
+      if (done) break;
+    }
+
+    if (!completed) throw new Error('The stream ended before a final response was received.');
+    return completed;
+  },
+
   upload: async (file: File): Promise<UploadResponse> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -121,6 +213,19 @@ export const LegalAI = {
     if (!res.ok) {
       const error = await res.text();
       throw new Error(`History search error: ${res.statusText} - ${error}`);
+    }
+
+    return res.json();
+  },
+
+  listHistory: async (limit = 30, offset = 0): Promise<ConversationListResponse> => {
+    const res = await fetch(`${API_BASE_URL}/history/conversations?limit=${limit}&offset=${offset}`, {
+      headers: await authHeaders(),
+    });
+
+    if (!res.ok) {
+      const error = await res.text();
+      throw new Error(`List history error: ${res.statusText} - ${error}`);
     }
 
     return res.json();

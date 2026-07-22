@@ -61,6 +61,25 @@ class GraphState(TypedDict, total=False):
     case_law_retriever: Optional[Any]
     source_merger: Optional[Any]
     detected_conflicts: list[dict]
+    # Optional live-research callbacks used only by the SSE chat endpoint.
+    # They remain out of persisted state and are ignored by normal requests.
+    status_callback: Optional[Any]
+    token_callback: Optional[Any]
+
+
+def _emit_research_status(state: GraphState, stage: str, label: str, detail: Optional[str] = None) -> None:
+    """Send a truthful progress update when this run is being streamed."""
+    callback = state.get("status_callback")
+    if not callable(callback):
+        return
+    try:
+        payload: dict[str, str] = {"stage": stage, "label": label}
+        if detail:
+            payload["detail"] = detail
+        callback(payload)
+    except Exception as exc:
+        # A disconnected browser must never interrupt legal research.
+        logger.debug("Research status callback failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +88,7 @@ class GraphState(TypedDict, total=False):
 
 def ingest_input(state: GraphState) -> GraphState:
     """Validate and normalize the incoming query."""
+    _emit_research_status(state, "preparing", "Preparing your research session")
     query = state.get("query", "").strip()
     if not query:
         state["error"] = "Empty query received"
@@ -98,6 +118,7 @@ def classify_mode(state: GraphState) -> GraphState:
     - If query is about general federal law → FEDERAL mode
     - If ambiguous → ask clarification
     """
+    _emit_research_status(state, "routing", "Identifying the relevant legal sources")
     upload_id = state.get("upload_id")
 
     if upload_id:
@@ -375,6 +396,8 @@ def make_plan(state: GraphState) -> GraphState:
         plan["entities"] = state.get("entities", [])
 
     state["retrieval_plan"] = plan
+    mode_label = mode.value.replace("_", " ") if isinstance(mode, QueryMode) else str(mode)
+    _emit_research_status(state, "planning", "Building a source-specific research plan", mode_label.title())
     return state
 
 
@@ -403,6 +426,7 @@ def retrieve_context(state: GraphState) -> GraphState:
     plan = state.get("retrieval_plan", {})
 
     logger.info(f"Retrieving context in {mode} mode with plan: {plan}")
+    _emit_research_status(state, "retrieving", "Searching the isolated legal corpus")
 
     # Always perform retrieval using the plan — never re-use pre-populated chunks
     # because the plan may have a title_filter that wasn't applied before.
@@ -532,6 +556,13 @@ def retrieve_context(state: GraphState) -> GraphState:
         state["retrieval_score"] = 0.0
         state["retrieval_sufficient"] = False
 
+    _emit_research_status(
+        state,
+        "retrieved",
+        "Evidence retrieved",
+        f"{len(chunks_raw)} source {'chunk' if len(chunks_raw) == 1 else 'chunks'} found",
+    )
+
     return state
 
 
@@ -650,10 +681,10 @@ Answer from your general knowledge of U.S. law as helpfully as you can, but:
 3. Keep the answer concise and in plain language.
 4. Do not present this as legal advice.
 
-This answer will be labeled to the user as unverified general knowledge, not sourced from the indexed corpus."""
+The user will be told calmly that no supporting material was retrieved from the Digital Jurist knowledge base and that the response is general legal information."""
 
 
-def _generate_unverified_answer(query: str) -> Optional[str]:
+def _generate_unverified_answer(query: str, token_callback: Optional[Any] = None) -> Optional[str]:
     """Fall back to the LLM's own knowledge when retrieval/verification failed.
 
     Only used for non-document modes — document Q&A must stay strictly grounded
@@ -666,18 +697,30 @@ def _generate_unverified_answer(query: str) -> Optional[str]:
         if not check_openai_configured():
             return None
 
-        answer_text, _ = chat_completion(
-            [
-                {"role": "system", "content": _GENERAL_KNOWLEDGE_SYSTEM_PROMPT},
-                {"role": "user", "content": query},
-            ],
-            operation="generate_unverified_answer",
-        )
+        messages = [
+            {"role": "system", "content": _GENERAL_KNOWLEDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": query},
+        ]
+        if callable(token_callback):
+            from app.core.llm import stream_chat_completion
+            knowledge_base_note = (
+                "*The Digital Jurist did not retrieve supporting material from its knowledge base "
+                "for this question, so the response below provides general legal information.*\n\n"
+            )
+            token_callback(knowledge_base_note)
+            text_deltas: list[str] = []
+            for delta in stream_chat_completion(messages, operation="generate_unverified_answer"):
+                token_callback(delta)
+                text_deltas.append(delta)
+            answer_text = "".join(text_deltas)
+            return knowledge_base_note + answer_text if answer_text else None
+
+        answer_text, _ = chat_completion(messages, operation="generate_unverified_answer")
         if not answer_text:
             return None
         return (
-            "⚠️ **Unverified — general knowledge, not sourced from the indexed corpus.** "
-            "Independently confirm any citation before relying on it.\n\n" + answer_text
+            "*The Digital Jurist did not retrieve supporting material from its knowledge base "
+            "for this question, so the response below provides general legal information.*\n\n" + answer_text
         )
     except Exception as e:
         logger.warning(f"Unverified fallback generation failed: {e}")
@@ -793,7 +836,9 @@ def generate_answer(state: GraphState) -> GraphState:
         )},
     ]
 
-    # Call real OpenAI LLM
+    _emit_research_status(state, "generating", "Drafting a grounded answer from the retrieved evidence")
+
+    # Call real OpenAI LLM. Stream only when an SSE request supplied a token callback.
     try:
         from app.core.llm import chat_completion, check_openai_configured
 
@@ -803,10 +848,16 @@ def generate_answer(state: GraphState) -> GraphState:
             state["error"] = "OpenAI API key not configured"
             return state
 
-        answer_text, usage = chat_completion(
-            messages,
-            operation="generate_answer",
-        )
+        token_callback = state.get("token_callback")
+        if callable(token_callback):
+            from app.core.llm import stream_chat_completion
+            text_deltas: list[str] = []
+            for delta in stream_chat_completion(messages, operation="generate_answer"):
+                token_callback(delta)
+                text_deltas.append(delta)
+            answer_text = "".join(text_deltas)
+        else:
+            answer_text, _ = chat_completion(messages, operation="generate_answer")
         state["draft_answer"] = answer_text
 
     except Exception as e:
@@ -911,6 +962,7 @@ def verify_answer(state: GraphState) -> GraphState:
     4. Unsupported claims are flagged
     5. Confidence threshold is met
     """
+    _emit_research_status(state, "verifying", "Checking citations and source isolation")
     issues: list[str] = []
 
     draft = state.get("draft_answer")
@@ -1016,7 +1068,11 @@ def retry_or_finalize(state: GraphState) -> GraphState:
     # unverified general knowledge rather than a bare "I don't know".
     mode = state.get("resolved_mode")
     if mode != QueryMode.DOCUMENT:
-        fallback = _generate_unverified_answer(state.get("query", ""))
+        _emit_research_status(state, "fallback", "Preparing a clearly labeled general-information response")
+        fallback = _generate_unverified_answer(
+            state.get("query", ""),
+            state.get("token_callback"),
+        )
         if fallback:
             state["final_answer"] = fallback
             state["confidence"] = ConfidenceLevel.UNVERIFIED
@@ -1042,6 +1098,7 @@ def retry_or_finalize(state: GraphState) -> GraphState:
 
 def persist_logs_and_metrics(state: GraphState) -> GraphState:
     """Persist retrieval logs, answer logs, verification logs to database."""
+    _emit_research_status(state, "complete", "Research complete")
     logger.info(
         f"Persisting logs — mode={state.get('resolved_mode')}, "
         f"confidence={state.get('confidence')}, "

@@ -154,6 +154,61 @@ def chat_completion(
     return content, usage
 
 
+def stream_chat_completion(
+    messages: list[dict[str, str]],
+    *,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    operation: str = "chat_completion_stream",
+):
+    """Yield completion text as OpenAI returns it.
+
+    The caller owns assembling the response.  This deliberately mirrors
+    ``chat_completion`` so streamed and non-streamed answers use the same
+    model, retry policy, and Prometheus instrumentation.
+    """
+    client = get_openai_client()
+    _model = model or settings.llm_model
+    _temperature = temperature if temperature is not None else settings.llm_temperature
+    _max_tokens = max_tokens or settings.llm_max_tokens
+
+    llm_calls_total.labels(model=_model, operation=operation).inc()
+
+    def _call():
+        return client.chat.completions.create(
+            model=_model,
+            messages=messages,
+            temperature=_temperature,
+            max_tokens=_max_tokens,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+    start_time = time.perf_counter()
+    try:
+        stream = _retry_with_backoff(
+            _call,
+            max_retries=settings.openai_max_retries,
+            base_delay=settings.openai_retry_base_delay,
+            max_delay=settings.openai_retry_max_delay,
+            operation=operation,
+            model=_model,
+        )
+        for chunk in stream:
+            if chunk.usage:
+                llm_tokens_prompt_total.labels(model=_model).inc(chunk.usage.prompt_tokens or 0)
+                llm_tokens_completion_total.labels(model=_model).inc(chunk.usage.completion_tokens or 0)
+            if not chunk.choices:
+                continue
+            text = chunk.choices[0].delta.content
+            if text:
+                yield text
+    finally:
+        duration = time.perf_counter() - start_time
+        llm_call_duration_seconds.labels(model=_model, operation=operation).observe(duration)
+
+
 # ---------------------------------------------------------------------------
 # OpenAI Embeddings
 # ---------------------------------------------------------------------------

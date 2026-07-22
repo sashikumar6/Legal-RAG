@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 from app.core.config import settings
 from app.core.schemas import (
@@ -42,18 +44,16 @@ class ChatService:
         self.source_merger = SourceMerger()
         self.agent_graph = build_agent_graph()
 
-    async def process_query(self, request: ChatRequest, identity: Optional[object] = None) -> ChatResponse:
-        """Process a chat query through the agent workflow.
-
-        `identity` (an AuthIdentity from core.auth, or None for anonymous callers)
-        is resolved into a local user row inside the same defensive persistence
-        block as everything else, so a DB hiccup degrades to anonymous instead
-        of breaking the chat response.
-        """
-        session_id = request.session_id or str(uuid.uuid4())
-
-        # Build initial state — inject retriever instances so the agent graph can use them
-        initial_state: GraphState = {
+    def _initial_state(
+        self,
+        request: ChatRequest,
+        session_id: str,
+        *,
+        status_callback: Optional[Callable[[dict[str, str]], None]] = None,
+        token_callback: Optional[Callable[[str], None]] = None,
+    ) -> GraphState:
+        """Create graph state for both JSON and streaming chat requests."""
+        return {
             "query": request.query,
             "session_id": session_id,
             "upload_id": request.upload_id,
@@ -70,47 +70,55 @@ class ChatService:
             "retrieval_sufficient": False,
             "verification_passed": False,
             "confidence": ConfidenceLevel.INSUFFICIENT,
-            # Inject live retriever instances so retrieve_context node can use them
+            # Inject live retriever instances so retrieve_context can use them.
             "federal_retriever": self.federal_retriever,
             "document_retriever": self.document_retriever,
             "cfr_retriever": self.cfr_retriever,
             "case_law_retriever": self.case_law_retriever,
             "source_merger": self.source_merger,
+            "status_callback": status_callback,
+            "token_callback": token_callback,
         }
 
-        # Run agent graph
+    def _run_agent(self, initial_state: GraphState) -> GraphState:
+        """Run the synchronous graph while preserving the manual fallback."""
         if self.agent_graph:
             try:
-                final_state = self.agent_graph.invoke(initial_state)
+                return self.agent_graph.invoke(initial_state)
             except Exception as e:
                 logger.error(f"Agent graph error: {e}")
-                final_state = initial_state
-                final_state["error"] = str(e)
-        else:
-            # Graph not available — run nodes manually (same flow)
-            from app.agents import (
-                classify_mode, classify_domain, extract_entities, detect_title_hints,
-                detect_document_scope, make_plan, grade_retrieval,
-                generate_answer, verify_answer, retry_or_finalize,
-                persist_logs_and_metrics,
-            )
-            state = initial_state
-            if not state.get("resolved_mode"):
-                state = classify_mode(state)
-            state = classify_domain(state)
-            if not state.get("off_domain"):
-                state = extract_entities(state)
-                state = detect_title_hints(state)
-                state = detect_document_scope(state)
-                state = make_plan(state)
-                state = grade_retrieval(state)
-                state = generate_answer(state)
-                state = verify_answer(state)
-                state = retry_or_finalize(state)
-            state = persist_logs_and_metrics(state)
-            final_state = state
+                initial_state["error"] = str(e)
+                return initial_state
 
-        # Handle clarification
+        from app.agents import (
+            classify_mode, classify_domain, extract_entities, detect_title_hints,
+            detect_document_scope, make_plan, grade_retrieval,
+            generate_answer, verify_answer, retry_or_finalize,
+            persist_logs_and_metrics,
+        )
+        state = initial_state
+        if not state.get("resolved_mode"):
+            state = classify_mode(state)
+        state = classify_domain(state)
+        if not state.get("off_domain"):
+            state = extract_entities(state)
+            state = detect_title_hints(state)
+            state = detect_document_scope(state)
+            state = make_plan(state)
+            state = grade_retrieval(state)
+            state = generate_answer(state)
+            state = verify_answer(state)
+            state = retry_or_finalize(state)
+        return persist_logs_and_metrics(state)
+
+    async def _build_response(
+        self,
+        request: ChatRequest,
+        identity: Optional[object],
+        session_id: str,
+        final_state: GraphState,
+    ) -> ChatResponse:
+        """Convert final graph state into a persisted ChatResponse."""
         if final_state.get("needs_clarification"):
             return ChatResponse(
                 answer="",
@@ -121,10 +129,8 @@ class ChatService:
                 session_id=session_id,
             )
 
-        # Build response
-        citations = []
-        for cit_data in final_state.get("citations", []):
-            citations.append(Citation(
+        citations = [
+            Citation(
                 source_type=cit_data.get("source_type", ""),
                 document_id=cit_data.get("document_id", ""),
                 text=cit_data.get("text", ""),
@@ -135,7 +141,9 @@ class ChatService:
                 heading=cit_data.get("heading"),
                 section_label=cit_data.get("section_label"),
                 relevance_score=cit_data.get("relevance_score"),
-            ))
+            )
+            for cit_data in final_state.get("citations", [])
+        ]
 
         answer_text = final_state.get("final_answer") or final_state.get("draft_answer") or "Unable to generate answer."
         resolved_mode = final_state.get("resolved_mode", "unknown")
@@ -162,6 +170,50 @@ class ChatService:
             session_id=session_id,
             conversation_id=conversation_id_out,
         )
+
+    async def process_query(self, request: ChatRequest, identity: Optional[object] = None) -> ChatResponse:
+        """Process a chat query through the agent workflow.
+
+        `identity` (an AuthIdentity from core.auth, or None for anonymous callers)
+        is resolved into a local user row inside the same defensive persistence
+        block as everything else, so a DB hiccup degrades to anonymous instead
+        of breaking the chat response.
+        """
+        session_id = request.session_id or str(uuid.uuid4())
+
+        final_state = self._run_agent(self._initial_state(request, session_id))
+        return await self._build_response(request, identity, session_id, final_state)
+
+    async def stream_query(
+        self,
+        request: ChatRequest,
+        identity: Optional[object] = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Run a chat request in a worker thread and yield live research events."""
+        session_id = request.session_id or str(uuid.uuid4())
+        loop = asyncio.get_running_loop()
+        events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        def publish(event: str, data: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(events.put_nowait, {"event": event, "data": data})
+
+        initial_state = self._initial_state(
+            request,
+            session_id,
+            status_callback=lambda data: publish("status", data),
+            token_callback=lambda text: publish("token", {"text": text}),
+        )
+        worker = asyncio.create_task(asyncio.to_thread(self._run_agent, initial_state))
+
+        while not worker.done() or not events.empty():
+            try:
+                yield await asyncio.wait_for(events.get(), timeout=0.25)
+            except asyncio.TimeoutError:
+                yield {"event": "ping", "data": {}}
+
+        final_state = await worker
+        response = await self._build_response(request, identity, session_id, final_state)
+        yield {"event": "complete", "data": response.model_dump(mode="json")}
 
     async def _persist_turn(
         self,
@@ -200,6 +252,7 @@ class ChatService:
                     mode=mode, confidence=confidence, citations=citations,
                 )
                 conversation.mode = mode
+                conversation.updated_at = datetime.utcnow()
                 await db.commit()
                 return str(conversation.id)
         except Exception as e:

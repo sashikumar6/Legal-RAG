@@ -27,6 +27,11 @@ class HistorySearchResponse(BaseModel):
     results: list[HistoryResultItem]
 
 
+class ConversationListResponse(BaseModel):
+    results: list[HistoryResultItem]
+    next_offset: Optional[int] = None
+
+
 class HistoryMessageItem(BaseModel):
     role: str
     content: str
@@ -63,6 +68,30 @@ async def search_history(
             )
             for c in conversations
         ],
+    )
+
+
+@router.get("/conversations", response_model=ConversationListResponse)
+async def list_history(
+    limit: int = Query(30, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_async_session),
+):
+    conversations = await crud.list_conversations(db, user.id, limit=limit + 1, offset=offset)
+    has_more = len(conversations) > limit
+    visible = conversations[:limit]
+    return ConversationListResponse(
+        results=[
+            HistoryResultItem(
+                conversation_id=str(c.id),
+                title=c.title,
+                mode=c.mode,
+                updated_at=(c.updated_at or c.created_at).isoformat(),
+            )
+            for c in visible
+        ],
+        next_offset=offset + limit if has_more else None,
     )
 
 

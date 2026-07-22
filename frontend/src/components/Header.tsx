@@ -4,11 +4,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Search, Settings, User as UserIcon } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 import { LegalAI, HistoryResultItem } from '@/lib/api';
+import type { ChatCitation } from '@/lib/api';
 import type { ChatMessage } from '@/components/knowledge/ChatArea';
 
 interface HeaderProps {
   currentMode: 'knowledge' | 'analysis';
-  onLoadConversation?: (conversationId: string, messages: ChatMessage[]) => void;
+  onModeChange: (mode: 'knowledge' | 'analysis') => void;
+  onLoadConversation?: (conversationId: string, messages: ChatMessage[], citations?: ChatCitation[]) => void;
+  onOpenSettings: () => void;
 }
 
 function useOutsideClick(onOutside: () => void) {
@@ -23,7 +26,7 @@ function useOutsideClick(onOutside: () => void) {
   return ref;
 }
 
-export function Header({ currentMode, onLoadConversation }: HeaderProps) {
+export function Header({ currentMode, onModeChange, onLoadConversation, onOpenSettings }: HeaderProps) {
   const { user, loading, signInWithGoogle, signOut } = useAuth();
 
   const [accountOpen, setAccountOpen] = useState(false);
@@ -63,7 +66,11 @@ export function Header({ currentMode, onLoadConversation }: HeaderProps) {
         content: m.content,
         timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }));
-      onLoadConversation(conversationId, messages);
+      const citations = [...detail.messages]
+        .reverse()
+        .find((message) => message.role === 'assistant' && message.citations.length > 0)
+        ?.citations || [];
+      onLoadConversation(conversationId, messages, citations);
       setSearchOpen(false);
       setQuery('');
     } catch {
@@ -72,19 +79,19 @@ export function Header({ currentMode, onLoadConversation }: HeaderProps) {
   };
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 flex-shrink-0">
+    <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-[#fafaf8] px-5 md:px-8">
 
       {/* Current Context / Breadcrumbs */}
       <div className="flex items-center space-x-2">
-        <h2 className="text-lg font-bold text-slate-900 tracking-tight">The Digital Jurist</h2>
+        <h2 className="font-serif text-xl font-semibold tracking-tight text-emerald-950">The Digital Jurist</h2>
         <span className="text-slate-300 mx-2">|</span>
         <div className="flex space-x-6 text-sm font-medium">
-          <span className={`${currentMode === 'knowledge' ? 'text-slate-800 border-b-2 border-slate-800 pb-5 pt-5 relative top-[1px]' : 'text-slate-400'}`}>
+          <button onClick={() => onModeChange('knowledge')} className={`${currentMode === 'knowledge' ? 'border-b-2 border-emerald-950 pb-5 pt-5 text-emerald-950' : 'text-slate-400 hover:text-slate-700'}`}>
             Knowledge Mode
-          </span>
-          <span className={`${currentMode === 'analysis' ? 'text-slate-800 border-b-2 border-slate-800 pb-5 pt-5 relative top-[1px]' : 'text-slate-400'}`}>
+          </button>
+          <button onClick={() => onModeChange('analysis')} className={`${currentMode === 'analysis' ? 'border-b-2 border-emerald-950 pb-5 pt-5 text-emerald-950' : 'text-slate-400 hover:text-slate-700'}`}>
             Analysis Mode
-          </span>
+          </button>
         </div>
       </div>
 
@@ -126,7 +133,7 @@ export function Header({ currentMode, onLoadConversation }: HeaderProps) {
           )}
         </div>
 
-        <button className="text-slate-400 hover:text-slate-600 transition-colors">
+        <button onClick={onOpenSettings} aria-label="Open research settings" className="text-slate-400 transition-colors hover:text-emerald-950">
           <Settings size={20} />
         </button>
 

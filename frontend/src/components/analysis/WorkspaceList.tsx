@@ -1,4 +1,4 @@
-import { FileText, MoreVertical } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import type { WorkspaceDoc } from './AnalysisView';
 
 interface Props {
@@ -14,9 +14,7 @@ export function WorkspaceList({ workspaces, activeWorkspaceId, onSelect }: Props
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-xl font-bold text-slate-900">Active Workspaces</h3>
-        <button className="text-sm font-semibold text-slate-600 hover:text-slate-900 transition-colors">
-          View All Documents
-        </button>
+        <span className="text-sm font-semibold text-slate-500">{workspaces.length} document{workspaces.length === 1 ? '' : 's'}</span>
       </div>
 
       <div className="space-y-4">
@@ -44,12 +42,6 @@ export function WorkspaceList({ workspaces, activeWorkspaceId, onSelect }: Props
                 {doc.status === 'PROCESSING' && <span className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse mr-1.5 inline-block"></span>}
                 {doc.status}
               </span>
-              <button 
-                className="text-slate-400 hover:text-slate-600"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreVertical size={16} />
-              </button>
             </div>
           </div>
         ))}

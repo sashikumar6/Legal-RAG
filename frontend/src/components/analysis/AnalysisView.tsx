@@ -1,7 +1,7 @@
 import { useState, useCallback, Dispatch, SetStateAction } from 'react';
 import { Dropzone } from './Dropzone';
 import { WorkspaceList } from './WorkspaceList';
-import { LegalAI, type ChatCitation } from '@/lib/api';
+import { LegalAI, type ChatCitation, type ResearchStatus } from '@/lib/api';
 import { ChatArea, type ChatMessage } from '../knowledge/ChatArea';
 import { InputBox } from '../knowledge/InputBox';
 
@@ -27,6 +27,7 @@ interface Props {
 export function AnalysisView({ workspaces, setWorkspaces, activeWorkspaceId, setActiveWorkspaceId, onCitationsUpdate }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [researchSteps, setResearchSteps] = useState<ResearchStatus[]>([]);
 
   const handleFileUpload = useCallback(async (file: File) => {
     const docId = `temp-${Date.now()}`;
@@ -72,27 +73,35 @@ export function AnalysisView({ workspaces, setWorkspaces, activeWorkspaceId, set
   const handleSend = async (text: string) => {
     if (!activeWorkspaceId) return;
 
-    const userMsg: ChatMessage = { role: 'user', content: text, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) };
-    setMessages(prev => [...prev, userMsg]);
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const userMsg: ChatMessage = { role: 'user', content: text, timestamp };
+    const assistantMsg: ChatMessage = { role: 'assistant', content: '', timestamp, isStreaming: true };
+    setMessages(prev => [...prev, userMsg, assistantMsg]);
     setIsThinking(true);
+    setResearchSteps([]);
     onCitationsUpdate([]);
 
     try {
-      const resp = await LegalAI.chat(text, 'document', activeWorkspaceId);
-      
-      const aiMsg: ChatMessage = { 
-        role: 'assistant', 
-        content: resp.answer || "I could not find an answer in the document.",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      
-      setMessages(prev => [...prev, aiMsg]);
+      const resp = await LegalAI.chatStream(text, 'document', activeWorkspaceId, undefined, {
+        onStatus: (status) => setResearchSteps(previous => [...previous, status]),
+        onToken: (token) => setMessages(previous => previous.map((message, index) => (
+          index === previous.length - 1 ? { ...message, content: message.content + token } : message
+        ))),
+      });
+      setMessages(previous => previous.map((message, index) => (
+        index === previous.length - 1
+          ? { ...message, content: resp.answer || 'I could not find an answer in the document.', isStreaming: false }
+          : message
+      )));
       
       if (resp.citations) {
         onCitationsUpdate(resp.citations);
       }
     } catch (e: any) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `**Error:** An exception occurred contacting the backend.\n\`\`\`text\n${e.message}\n\`\`\``, timestamp: new Date().toLocaleTimeString() }]);
+      const detail = e instanceof Error ? e.message : 'Unknown network error';
+      setMessages(previous => previous.map((message, index) => (
+        index === previous.length - 1 ? { ...message, content: `**Research interrupted.** ${detail}`, isStreaming: false } : message
+      )));
     } finally {
       setIsThinking(false);
     }
@@ -127,16 +136,7 @@ export function AnalysisView({ workspaces, setWorkspaces, activeWorkspaceId, set
             </button>
           </div>
           
-          <ChatArea messages={messages} />
-          
-          {isThinking && (
-            <div className="absolute bottom-28 right-1/2 translate-x-1/2 bg-white px-4 py-2 shadow-lg rounded-full border border-slate-200 flex items-center space-x-2 z-10 animate-fade-in">
-              <span className="w-2 h-2 rounded-full bg-slate-900 animate-bounce"></span>
-              <span className="w-2 h-2 rounded-full bg-slate-700 animate-bounce" style={{ animationDelay: '0.1s' }}></span>
-              <span className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0.2s' }}></span>
-              <span className="text-xs font-semibold text-slate-800 tracking-wider uppercase ml-1">Analyzing...</span>
-            </div>
-          )}
+          <ChatArea messages={messages} researchSteps={researchSteps} isResearching={isThinking} />
           
           <InputBox onSend={handleSend} disabled={isThinking} />
         </div>
