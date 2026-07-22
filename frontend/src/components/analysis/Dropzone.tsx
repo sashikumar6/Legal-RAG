@@ -25,35 +25,35 @@ export function Dropzone({ onUpload }: { onUpload: (f: File) => void }) {
         setIsDragging(false);
         acceptFile(event.dataTransfer.files[0]);
       }}
-      className={`mb-10 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-white p-12 text-center transition-colors ${isDragging ? 'border-emerald-800 bg-emerald-50' : 'border-slate-300 hover:border-slate-400'}`}
+      className={`mb-10 flex flex-col items-center justify-center border-2 border-dashed bg-white p-12 text-center transition-colors ${isDragging ? 'border-emerald-800 bg-[#f4f6f2]' : 'border-slate-300 hover:border-emerald-900/40'}`}
     >
-      <input 
-        type="file" 
-        className="hidden" 
-        ref={fileInputRef} 
-        onChange={handleFileChange} 
+      <input
+        type="file"
+        className="hidden"
+        ref={fileInputRef}
+        onChange={handleFileChange}
         accept=".pdf,.docx,.txt"
       />
-      
-      <div className="bg-slate-100 p-4 rounded-xl mb-6">
-        <CloudUpload size={28} className="text-slate-700" />
+
+      <div className="mb-6 bg-[#f4f6f2] p-4">
+        <CloudUpload size={28} className="text-emerald-900" />
       </div>
-      
-      <h3 className="text-2xl font-bold text-slate-900 mb-2">Drop documents here</h3>
-      <p className="text-slate-500 mb-8 max-w-sm">
+
+      <h3 className="mb-2 font-serif text-2xl text-emerald-950">Drop documents here</h3>
+      <p className="mb-8 max-w-sm text-slate-500">
         Support for PDF, DOCX, and TXT files. Maximum individual file size 50MB.
       </p>
-      
-      <div className="flex space-x-4 mb-10">
-        <button 
+
+      <div className="mb-10 flex space-x-4">
+        <button
           onClick={() => fileInputRef.current?.click()}
-          className="flex items-center space-x-2 bg-[#151238] hover:bg-slate-900 text-white px-5 py-2.5 rounded-lg font-medium text-sm transition-colors shadow-sm"
+          className="flex items-center space-x-2 bg-emerald-950 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-900"
         >
           <FileText size={16} />
           <span>Select Files</span>
         </button>
       </div>
-      
+
       <div className="flex items-center space-x-8 text-slate-400 font-medium text-sm">
         <div className="flex items-center space-x-2">
           <File size={16} />

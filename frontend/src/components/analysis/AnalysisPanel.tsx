@@ -35,81 +35,77 @@ export function AnalysisPanel({ workspaces, setWorkspaces, activeWorkspaceId, ci
   };
 
   return (
-    <div className="w-80 bg-slate-50 border-l border-slate-200 p-8 flex flex-col space-y-10 overflow-y-auto">
-      <h3 className="text-sm font-bold tracking-widest text-slate-400 uppercase">
-        Workspace Insights
-      </h3>
+    <aside className="hidden w-80 shrink-0 flex-col overflow-y-auto border-l border-slate-200 bg-[#f5f6f2] p-6 xl:flex">
+      <p className="mb-6 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Workspace insights</p>
 
       {activeDoc ? (
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div className="text-xs font-bold tracking-widest text-slate-900 uppercase mb-4">Active Document</div>
-          <div className="text-sm font-bold text-slate-800 break-words mb-2">{activeDoc.name}</div>
-          <div className="text-xs font-semibold text-slate-500 mb-2">Size: {activeDoc.size}</div>
-          <div className="w-full bg-slate-100 rounded-full h-1.5 mb-2 mt-4">
-            <div className="bg-slate-900 h-1.5 rounded-full" style={{ width: '100%' }}></div>
+        <div className="border border-slate-200 bg-white p-5">
+          <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-800">Active document</p>
+          <p className="mb-2 break-words font-serif text-lg text-emerald-950">{activeDoc.name}</p>
+          <p className="mb-3 text-xs text-slate-500">Size: {activeDoc.size}</p>
+          <div className="mb-2 h-1 w-full bg-slate-100">
+            <div className="h-1 bg-emerald-900" style={{ width: '100%' }} />
           </div>
-          <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
-            Status: <span className="font-bold text-slate-800">{activeDoc.status}</span>
+          <p className="text-[11px] text-slate-500">
+            Status: <span className="font-semibold text-emerald-950">{activeDoc.status}</span>
           </p>
         </div>
       ) : (
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div className="text-xs font-bold tracking-widest text-slate-900 uppercase mb-4">Batch Progress</div>
-          <div className="flex justify-between text-xs font-semibold text-slate-600 mb-2">
-            <span>Overall Status</span>
-            <span className="text-slate-900">{workspaces.length > 0 ? 'Analyzed' : 'Empty'}</span>
+        <div className="border border-slate-200 bg-white p-5">
+          <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-800">Batch progress</p>
+          <div className="mb-2 flex justify-between text-xs text-slate-600">
+            <span>Overall status</span>
+            <span className="font-semibold text-emerald-950">{workspaces.length > 0 ? 'Analyzed' : 'Empty'}</span>
           </div>
-          <div className="w-full bg-slate-100 rounded-full h-1.5 mb-4">
-            <div className="bg-slate-900 h-1.5 rounded-full" style={{ width: workspaces.length > 0 ? '100%' : '0%' }}></div>
+          <div className="mb-3 h-1 w-full bg-slate-100">
+            <div className="h-1 bg-emerald-900" style={{ width: workspaces.length > 0 ? '100%' : '0%' }} />
           </div>
-          <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
-            <span className="font-bold text-slate-800">{workspaces.length}</span> documents in workspace.
+          <p className="text-[11px] text-slate-500">
+            <span className="font-semibold text-emerald-950">{workspaces.length}</span> documents in workspace.
           </p>
         </div>
       )}
 
       {citations.length > 0 ? (
-        <div>
-          <h3 className="text-sm font-bold tracking-widest text-slate-400 uppercase mb-4">
-            Referenced Sources
-          </h3>
-          <div className="space-y-6">
+        <div className="mt-8">
+          <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Referenced sources</p>
+          <div className="space-y-5">
             {citations.map((c, i) => (
-              <div key={i} className="animate-fade-in group" style={{ animationDelay: `${i * 100}ms` }}>
-                <span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-bold uppercase tracking-widest mb-2">
-                  Document Match
-                </span>
-                <h4 className="font-bold text-sm text-slate-900 mb-1 flex items-start gap-2">
-                  <Bookmark size={14} className="mt-1 flex-shrink-0 text-slate-400" />
-                  <span>Page {c.section_number || c.canonical_citation || 'Unknown'} {c.heading ? `- ${c.heading}` : ''}</span>
-                </h4>
-                <p className="text-xs text-slate-500 font-medium leading-relaxed italic border-l-2 border-slate-300 pl-3 py-1">
-                  &quot;{c.text.length > 200 ? c.text.substring(0, 200) + '...' : c.text}&quot;
+              <article key={i} className="border-b border-slate-200 pb-5 last:border-b-0">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-800">
+                  <Bookmark size={13} />
+                  Document match
+                </div>
+                <h3 className="text-sm font-semibold leading-5 text-slate-800">
+                  Page {c.section_number || c.canonical_citation || 'Unknown'} {c.heading ? `— ${c.heading}` : ''}
+                </h3>
+                <p className="mt-2 border-l-2 border-emerald-900/20 pl-3 text-xs leading-5 text-slate-500">
+                  &quot;{c.text.length > 200 ? `${c.text.slice(0, 200)}…` : c.text}&quot;
                 </p>
-              </div>
+              </article>
             ))}
           </div>
         </div>
       ) : (
-        <div className="border-t border-slate-200 pt-5 text-xs leading-5 text-slate-500">
+        <p className="mt-8 border-t border-slate-200 pt-5 text-xs leading-5 text-slate-500">
           Upload a document and ask a question to see only evidence actually retrieved from that document.
-        </div>
+        </p>
       )}
 
-      <div className="mt-8 space-y-3">
-        <button 
+      <div className="mt-8 space-y-2">
+        <button
           onClick={downloadAudit}
-          className="w-full py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-bold uppercase tracking-widest transition-colors shadow-sm"
+          className="w-full bg-emerald-950 py-2.5 text-xs font-semibold uppercase tracking-widest text-white transition hover:bg-emerald-900"
         >
-          Download Full Audit
+          Download full audit
         </button>
-        <button 
+        <button
           onClick={() => setWorkspaces([])}
-          className="w-full py-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-bold uppercase tracking-widest transition-colors shadow-sm"
+          className="w-full border border-slate-300 bg-white py-2.5 text-xs font-semibold uppercase tracking-widest text-slate-600 transition hover:border-emerald-900/40 hover:text-emerald-950"
         >
-          Clear Workspace
+          Clear workspace
         </button>
       </div>
-    </div>
+    </aside>
   );
 }

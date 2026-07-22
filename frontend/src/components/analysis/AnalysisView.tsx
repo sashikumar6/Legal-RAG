@@ -51,9 +51,9 @@ export function AnalysisView({ workspaces, setWorkspaces, activeWorkspaceId, set
         ...w,
         id: result.upload_id || docId,
         status: 'ANALYZED',
-        color: 'bg-orange-100 text-orange-800',
-        iconColor: 'text-orange-600 bg-orange-50',
-        border: 'border-l-orange-600'
+        color: 'bg-[#f4f6f2] text-emerald-900',
+        iconColor: 'text-emerald-900 bg-[#f4f6f2]',
+        border: 'border-l-emerald-900'
       } : w));
       
       if (result.upload_id) {
@@ -108,36 +108,34 @@ export function AnalysisView({ workspaces, setWorkspaces, activeWorkspaceId, set
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-slate-50 relative overflow-hidden">
+    <div className="relative flex flex-1 flex-col overflow-hidden bg-[#fafaf8]">
       {!activeWorkspaceId ? (
-        <div className="flex-1 overflow-y-auto px-12 pt-16 pb-8">
-          <div className="max-w-4xl mx-auto w-full space-y-12">
-            <div>
-              <h2 className="text-4xl font-bold tracking-tight text-slate-900 flex items-center space-x-3 mb-2">
-                <span className="w-1 h-8 bg-slate-600 inline-block rounded-full mr-2"></span>
-                Analysis Mode
-              </h2>
-              <p className="text-xl text-slate-600 font-medium">Upload your discovery documents for AI-driven risk assessment, entity extraction, and cross-reference analysis.</p>
+        <div className="flex-1 overflow-y-auto px-5 py-12 md:px-12 lg:px-16">
+          <div className="mx-auto max-w-4xl w-full space-y-10">
+            <div className="max-w-2xl">
+              <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-800">Analysis mode</p>
+              <h1 className="font-serif text-4xl leading-tight tracking-tight text-emerald-950 md:text-5xl">Analyze discovery documents with grounded evidence.</h1>
+              <p className="mt-5 max-w-xl text-lg leading-8 text-slate-600">Upload a document for risk assessment, entity extraction, and cross-reference analysis — answers are grounded only in that file.</p>
             </div>
 
             <Dropzone onUpload={handleFileUpload} />
-            
+
             <WorkspaceList workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} onSelect={setActiveWorkspaceId} />
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex flex-col h-full overflow-hidden">
-          <div className="p-4 bg-white border-b border-slate-200 shadow-sm flex items-center justify-between z-10">
+        <div className="flex h-full flex-1 flex-col overflow-hidden">
+          <div className="z-10 flex items-center justify-between border-b border-slate-200 bg-[#fafaf8] p-4 shadow-sm">
             <div className="flex items-center space-x-3">
-              <span className="font-bold text-slate-800">Document Chat: {workspaces.find(w => w.id === activeWorkspaceId)?.name}</span>
+              <span className="font-serif text-lg text-emerald-950">Document Chat: {workspaces.find(w => w.id === activeWorkspaceId)?.name}</span>
             </div>
-            <button onClick={() => setActiveWorkspaceId(null)} className="text-sm font-semibold text-slate-500 hover:text-slate-800">
+            <button onClick={() => setActiveWorkspaceId(null)} className="text-sm font-semibold text-slate-500 transition hover:text-emerald-950">
               Back to Overview
             </button>
           </div>
-          
+
           <ChatArea messages={messages} researchSteps={researchSteps} isResearching={isThinking} />
-          
+
           <InputBox onSend={handleSend} disabled={isThinking} />
         </div>
       )}

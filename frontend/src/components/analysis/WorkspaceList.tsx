@@ -12,34 +12,34 @@ export function WorkspaceList({ workspaces, activeWorkspaceId, onSelect }: Props
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-xl font-bold text-slate-900">Active Workspaces</h3>
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="font-serif text-xl text-emerald-950">Active Workspaces</h3>
         <span className="text-sm font-semibold text-slate-500">{workspaces.length} document{workspaces.length === 1 ? '' : 's'}</span>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {workspaces.map((doc) => (
-          <div 
-            key={doc.id} 
+          <div
+            key={doc.id}
             onClick={() => onSelect(doc.id)}
-            className={`flex items-center justify-between p-4 bg-white border rounded-xl shadow-sm border-l-4 cursor-pointer transition-colors ${doc.border} ${activeWorkspaceId === doc.id ? 'border-slate-400 bg-slate-50' : 'border-slate-200'}`}
+            className={`flex cursor-pointer items-center justify-between border border-l-4 bg-white p-4 transition-colors ${doc.border} ${activeWorkspaceId === doc.id ? 'border-emerald-900/30 bg-[#f4f6f2]' : 'border-slate-200'}`}
           >
             <div className="flex items-center space-x-4">
-              <div className={`p-3 rounded-lg ${doc.iconColor}`}>
+              <div className={`p-3 ${doc.iconColor}`}>
                 <FileText size={20} />
               </div>
               <div>
-                <h4 className="font-bold text-slate-900 text-sm mb-0.5">{doc.name}</h4>
+                <h4 className="mb-0.5 text-sm font-semibold text-slate-800">{doc.name}</h4>
                 <div className="flex space-x-3 text-xs font-medium text-slate-500">
                   <span>Size: {doc.size}</span>
                   <span>Added: {doc.added}</span>
                 </div>
               </div>
             </div>
-            
+
             <div className="flex items-center space-x-4">
-              <span className={`text-[10px] font-bold px-2 py-1 uppercase rounded tracking-wider ${doc.color} ${doc.status === 'PROCESSING' ? 'flex items-center space-x-1' : ''}`}>
-                {doc.status === 'PROCESSING' && <span className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-pulse mr-1.5 inline-block"></span>}
+              <span className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${doc.color} ${doc.status === 'PROCESSING' ? 'flex items-center space-x-1' : ''}`}>
+                {doc.status === 'PROCESSING' && <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"></span>}
                 {doc.status}
               </span>
             </div>
