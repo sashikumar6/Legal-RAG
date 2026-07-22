@@ -44,7 +44,8 @@ class IngestionStatus(str, Enum):
 
 class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=5000, description="User question")
-    session_id: Optional[str] = Field(None, description="Session ID for conversation continuity")
+    session_id: Optional[str] = Field(None, description="Client-generated browser session ID for conversation continuity")
+    conversation_id: Optional[str] = Field(None, description="Conversation ID to append to; omit to start a new conversation")
     upload_id: Optional[str] = Field(None, description="Upload ID to scope document retrieval")
     mode: QueryMode = Field(QueryMode.AUTO, description="Query mode: federal, document, or auto-detect")
 
@@ -75,6 +76,7 @@ class ChatResponse(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     clarification_needed: bool = False
     clarification_question: Optional[str] = None
+    conversation_id: Optional[str] = Field(None, description="Persisted conversation ID; null if persistence failed")
     disclaimer: str = (
         "This information is for educational purposes only and does not constitute legal advice. "
         "Consult a qualified attorney for legal guidance."

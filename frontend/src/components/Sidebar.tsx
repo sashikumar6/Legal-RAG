@@ -64,10 +64,10 @@ export function Sidebar({ currentMode, setMode, onNewCase }: SidebarProps) {
             <Settings size={18} className="text-slate-400" />
             <span className="font-medium tracking-wide">SETTINGS</span>
           </button>
-          <button className="flex items-center space-x-3 px-2 py-2 text-sm text-slate-600 hover:text-slate-900 transition-colors">
+          <Link href="/support" className="flex items-center space-x-3 px-2 py-2 text-sm text-slate-600 hover:text-slate-900 transition-colors">
             <HelpCircle size={18} className="text-slate-400" />
             <span className="font-medium tracking-wide">SUPPORT</span>
-          </button>
+          </Link>
         </div>
       </div>
     </aside>

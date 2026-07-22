@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     database_pool_size: int = 20
     database_max_overflow: int = 10
 
+    # Supabase Auth — JWKS-based verification (project uses asymmetric signing keys)
+    supabase_url: str = ""
 
     # Qdrant
     qdrant_host: str = "localhost"

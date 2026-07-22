@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response
 
+from app.core.auth import AuthIdentity, get_current_user_optional
 from app.core.config import settings
 from app.core.schemas import (
     ChatRequest,
@@ -91,18 +93,25 @@ def _get_retrieval_service():
 # ---------------------------------------------------------------------------
 
 @router.post("/chat", response_model=ChatResponse, tags=["chat"])
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    identity: Optional[AuthIdentity] = Depends(get_current_user_optional),
+):
     """
     Submit a query for AI-powered legal research.
-    
+
     Mode is auto-detected or can be explicitly set:
     - federal: Search the U.S. Code corpus
     - document: Search an uploaded document (requires upload_id)
     - auto: System detects the appropriate mode
+
+    Works with or without a logged-in identity — logged-in users get their
+    conversation linked to their account (searchable later); anonymous
+    callers still get persistence and continuity, just unowned.
     """
     try:
         service = _get_chat_service()
-        response = await service.process_query(request)
+        response = await service.process_query(request, identity=identity)
         return response
     except Exception as e:
         logger.error(f"Chat error: {e}")

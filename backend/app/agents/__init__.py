@@ -34,6 +34,8 @@ class GraphState(TypedDict, total=False):
     session_id: str
     upload_id: Optional[str]
     resolved_mode: Optional[str]
+    mode_by_default: bool
+    off_domain: bool
     needs_clarification: bool
     clarification_question: Optional[str]
     entities: list[str]
@@ -104,11 +106,16 @@ def classify_mode(state: GraphState) -> GraphState:
 
     query_lower = state.get("query", "").lower()
 
-    # Document mode indicators
+    # Document mode indicators.
+    # "page "/"paragraph "/"clause " alone are too generic — ordinary legal
+    # questions routinely say things like "anti-modification clause" with no
+    # relation to an uploaded document. Require a demonstrative ("this"/"that")
+    # so the signal is actually about a document in front of the user.
     doc_indicators = [
         "uploaded document", "the document", "this document", "attached file",
         "the file", "my document", "the pdf", "the contract", "this contract",
-        "page ", "paragraph ", "clause ", "section of the document",
+        "this page", "that page", "this paragraph", "that paragraph",
+        "this clause", "that clause", "section of the document",
     ]
 
     # Federal mode indicators
@@ -171,6 +178,9 @@ def classify_mode(state: GraphState) -> GraphState:
 
     if fed_score > 0 or doc_score == 0:
         state["resolved_mode"] = QueryMode.FEDERAL
+        # True only when this is a pure fallback with zero legal signal at
+        # all — flags the query for the domain guardrail (classify_domain).
+        state["mode_by_default"] = fed_score == 0
         return state
 
     # Truly ambiguous
@@ -181,6 +191,55 @@ def classify_mode(state: GraphState) -> GraphState:
         "• If about federal law, I'll search the U.S. Code.\n"
         "• If about a document, please upload it first."
     )
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Node 2b: classify_domain
+# ---------------------------------------------------------------------------
+
+_DOMAIN_CHECK_PROMPT = """You determine whether a user's question is even remotely a legal, regulatory, or legal-research question — the kind a legal research assistant covering U.S. federal statutes, regulations, and case law could plausibly help with.
+
+Respond with EXACTLY one word:
+- LEGAL — the question is about law, regulations, legal rights/obligations, court cases, or legal research in any way, even if outside this system's specific indexed corpus.
+- OFF_TOPIC — the question has nothing to do with law (e.g. news, weather, general trivia, casual conversation, coding help, recipes, etc.)."""
+
+
+def classify_domain(state: GraphState) -> GraphState:
+    """Guardrail catching queries that reached FEDERAL mode purely by default
+    (zero legal keyword matched at all), so they don't burn a full retrieval +
+    generation pass just to arrive at "no relevant evidence" for something
+    like a news question. Skipped entirely when classify_mode already found
+    real legal signal, keeping the common path free of the extra round trip.
+    """
+    if not state.get("mode_by_default"):
+        return state
+
+    try:
+        from app.core.llm import chat_completion, check_openai_configured
+
+        if not check_openai_configured():
+            return state
+
+        result_text, _ = chat_completion(
+            [
+                {"role": "system", "content": _DOMAIN_CHECK_PROMPT},
+                {"role": "user", "content": state.get("query", "")},
+            ],
+            max_tokens=5,
+            operation="classify_domain",
+        )
+        if result_text.strip().upper().startswith("OFF_TOPIC"):
+            state["off_domain"] = True
+            state["final_answer"] = (
+                "I'm a legal research assistant, focused on U.S. federal statutes, "
+                "regulations, and case law. I can't help with that — try asking a "
+                "legal question instead."
+            )
+            state["confidence"] = ConfidenceLevel.INSUFFICIENT
+    except Exception as e:
+        logger.warning(f"Domain classification skipped due to error: {e}")
+
     return state
 
 
@@ -770,7 +829,7 @@ def generate_answer(state: GraphState) -> GraphState:
         elif mode == QueryMode.CASE_LAW:
             cit_source_type = "case_law"
         else:
-            cit_source_type = str(mode)
+            cit_source_type = mode.value if isinstance(mode, QueryMode) else str(mode)
 
         citation: dict[str, Any] = {
             "source_type": cit_source_type,
@@ -1010,6 +1069,7 @@ def build_agent_graph():
     # Add nodes
     workflow.add_node("ingest_input", ingest_input)
     workflow.add_node("classify_mode", classify_mode)
+    workflow.add_node("classify_domain", classify_domain)
     workflow.add_node("extract_entities", extract_entities)
     workflow.add_node("detect_title_hints", detect_title_hints)
     workflow.add_node("detect_document_scope", detect_document_scope)
@@ -1029,11 +1089,25 @@ def build_agent_graph():
     def _after_classify(state: GraphState) -> str:
         if state.get("needs_clarification"):
             return "persist_logs_and_metrics"
-        return "extract_entities"
+        return "classify_domain"
 
     workflow.add_conditional_edges(
         "classify_mode",
         _after_classify,
+        {
+            "classify_domain": "classify_domain",
+            "persist_logs_and_metrics": "persist_logs_and_metrics",
+        },
+    )
+
+    def _after_domain_check(state: GraphState) -> str:
+        if state.get("off_domain"):
+            return "persist_logs_and_metrics"
+        return "extract_entities"
+
+    workflow.add_conditional_edges(
+        "classify_domain",
+        _after_domain_check,
         {
             "extract_entities": "extract_entities",
             "persist_logs_and_metrics": "persist_logs_and_metrics",

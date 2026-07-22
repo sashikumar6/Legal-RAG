@@ -70,8 +70,10 @@ def create_app() -> FastAPI:
     app.add_middleware(MetricsMiddleware)
 
     # Include routers
+    from app.api.history import router as history_router
     from app.api.routes import router, health_router
     app.include_router(router, prefix=settings.api_prefix)
+    app.include_router(history_router, prefix=settings.api_prefix)
     app.include_router(health_router)
 
     return app

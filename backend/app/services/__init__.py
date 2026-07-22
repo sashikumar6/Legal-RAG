@@ -42,8 +42,14 @@ class ChatService:
         self.source_merger = SourceMerger()
         self.agent_graph = build_agent_graph()
 
-    async def process_query(self, request: ChatRequest) -> ChatResponse:
-        """Process a chat query through the agent workflow."""
+    async def process_query(self, request: ChatRequest, identity: Optional[object] = None) -> ChatResponse:
+        """Process a chat query through the agent workflow.
+
+        `identity` (an AuthIdentity from core.auth, or None for anonymous callers)
+        is resolved into a local user row inside the same defensive persistence
+        block as everything else, so a DB hiccup degrades to anonymous instead
+        of breaking the chat response.
+        """
         session_id = request.session_id or str(uuid.uuid4())
 
         # Build initial state — inject retriever instances so the agent graph can use them
@@ -83,7 +89,7 @@ class ChatService:
         else:
             # Graph not available — run nodes manually (same flow)
             from app.agents import (
-                classify_mode, extract_entities, detect_title_hints,
+                classify_mode, classify_domain, extract_entities, detect_title_hints,
                 detect_document_scope, make_plan, grade_retrieval,
                 generate_answer, verify_answer, retry_or_finalize,
                 persist_logs_and_metrics,
@@ -91,14 +97,16 @@ class ChatService:
             state = initial_state
             if not state.get("resolved_mode"):
                 state = classify_mode(state)
-            state = extract_entities(state)
-            state = detect_title_hints(state)
-            state = detect_document_scope(state)
-            state = make_plan(state)
-            state = grade_retrieval(state)
-            state = generate_answer(state)
-            state = verify_answer(state)
-            state = retry_or_finalize(state)
+            state = classify_domain(state)
+            if not state.get("off_domain"):
+                state = extract_entities(state)
+                state = detect_title_hints(state)
+                state = detect_document_scope(state)
+                state = make_plan(state)
+                state = grade_retrieval(state)
+                state = generate_answer(state)
+                state = verify_answer(state)
+                state = retry_or_finalize(state)
             state = persist_logs_and_metrics(state)
             final_state = state
 
@@ -129,14 +137,74 @@ class ChatService:
                 relevance_score=cit_data.get("relevance_score"),
             ))
 
+        answer_text = final_state.get("final_answer") or final_state.get("draft_answer") or "Unable to generate answer."
+        resolved_mode = final_state.get("resolved_mode", "unknown")
+        mode = resolved_mode.value if isinstance(resolved_mode, QueryMode) else str(resolved_mode)
+        confidence = ConfidenceLevel(final_state.get("confidence", ConfidenceLevel.INSUFFICIENT))
+
+        conversation_id_out = await self._persist_turn(
+            session_id=session_id,
+            conversation_id=request.conversation_id,
+            query=request.query,
+            answer=answer_text,
+            mode=mode,
+            confidence=confidence.value,
+            citations=[c.model_dump() for c in citations],
+            identity=identity,
+        )
+
         return ChatResponse(
-            answer=final_state.get("final_answer") or final_state.get("draft_answer") or "Unable to generate answer.",
-            mode=final_state.get("resolved_mode", "unknown"),
-            confidence=ConfidenceLevel(final_state.get("confidence", ConfidenceLevel.INSUFFICIENT)),
+            answer=answer_text,
+            mode=mode,
+            confidence=confidence,
             confidence_score=final_state.get("retrieval_score", 0.0),
             citations=citations,
             session_id=session_id,
+            conversation_id=conversation_id_out,
         )
+
+    async def _persist_turn(
+        self,
+        *,
+        session_id: str,
+        conversation_id: Optional[str],
+        query: str,
+        answer: str,
+        mode: str,
+        confidence: str,
+        citations: list[dict],
+        identity: Optional[object],
+    ) -> Optional[str]:
+        """Best-effort chat history persistence — never allowed to break /chat.
+
+        Opens and closes its own DB session rather than using FastAPI's
+        Depends(get_async_session), specifically so a database outage degrades
+        to "chat works, just isn't saved" instead of a 500 on every request.
+        """
+        try:
+            from app.database import async_session_factory, crud
+
+            async with async_session_factory() as db:
+                user_id = None
+                if identity is not None:
+                    user = await crud.get_or_create_user_by_identity(db, identity.sub, identity.email)
+                    user_id = user.id
+
+                session_row = await crud.get_or_create_session(db, session_id, user_id=user_id)
+                conversation = await crud.get_or_create_conversation(
+                    db, session_row, conversation_id, seed_title=query, mode=mode, user_id=user_id,
+                )
+                await crud.add_message(db, conversation.id, "user", query)
+                await crud.add_message(
+                    db, conversation.id, "assistant", answer,
+                    mode=mode, confidence=confidence, citations=citations,
+                )
+                conversation.mode = mode
+                await db.commit()
+                return str(conversation.id)
+        except Exception as e:
+            logger.error(f"Chat persistence failed (continuing without persistence): {e}")
+            return None
 
 
 class UploadService:
